@@ -79,7 +79,7 @@ class ReceiverApp:
         self.root.geometry("850x950")
         self.root.configure(bg="#f0f0f0")
 
-        # Erlaubte Formate
+        # Allowed formats
         self.valid_video_exts = {'.avi', '.mp4', '.mkv', '.mov', '.wmv'}
         self.valid_image_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.webp', '.tiff'}
 
@@ -97,10 +97,10 @@ class ReceiverApp:
         self.info_frame = tk.Frame(self.root, bg="#2c3e50", pady=15)
         self.info_frame.pack(fill="x")
 
-        self.status_var = tk.StringVar(value="BEREIT: BILD/VIDEO ABLEGEN ODER CAM STARTEN")
+        self.status_var = tk.StringVar(value="READY: DROP IMAGE/VIDEO OR START CAM")
         tk.Label(self.info_frame, textvariable=self.status_var, fg="#1abc9c", bg="#2c3e50", font=("Arial", 12, "bold")).pack()
 
-        self.progress_var = tk.StringVar(value="Fortschritt: 0 / 0 Chunks")
+        self.progress_var = tk.StringVar(value="Progress: 0 / 0 Chunks")
         tk.Label(self.info_frame, textvariable=self.progress_var, fg="#bdc3c7", bg="#2c3e50").pack()
 
         self.progress_bar = ttk.Progressbar(self.root, orient="horizontal", mode="determinate")
@@ -109,7 +109,7 @@ class ReceiverApp:
         self.drop_frame = tk.Frame(self.root, bg="#bdc3c7", bd=2, relief="groove")
         self.drop_frame.pack(fill="x", padx=30, pady=10)
 
-        txt = "➔ BILD/VIDEO HIER ABLEGEN ODER KLICKEN" if DND_AVAILABLE else "➔ KLICKEN ZUM ÖFFNEN"
+        txt = "➔ DROP IMAGE/VIDEO HERE OR CLICK" if DND_AVAILABLE else "➔ CLICK TO OPEN"
         self.drop_label = tk.Label(self.drop_frame, text=txt, 
                                   bg="#ffffff", fg="#2980b9", height=4, 
                                   font=("Arial", 11, "bold"), cursor="hand2")
@@ -124,21 +124,21 @@ class ReceiverApp:
         self.cam_frame = tk.Frame(self.root, bg="black", bd=2, relief="sunken")
         self.cam_frame.pack(expand=True, fill="both", padx=20, pady=10)
         
-        self.cam_label = tk.Label(self.cam_frame, bg="black", text="Scan-Vorschau", fg="white")
+        self.cam_label = tk.Label(self.cam_frame, bg="black", text="Scan Preview", fg="white")
         self.cam_label.pack(expand=True, fill="both")
 
         self.btn_frame = tk.Frame(self.root, bg="#f0f0f0", pady=10)
         self.btn_frame.pack(fill="x")
 
-        self.btn_start_cam = tk.Button(self.btn_frame, text="▶ KAMERA STARTEN", command=self.start_camera, 
+        self.btn_start_cam = tk.Button(self.btn_frame, text="▶ START CAMERA", command=self.start_camera, 
                                       bg="#27ae60", fg="white", font=("Arial", 10, "bold"), padx=15)
         self.btn_start_cam.pack(side="left", padx=20)
 
-        self.btn_stop_cam = tk.Button(self.btn_frame, text="⏹ STOPP", command=self.stop_camera, 
+        self.btn_stop_cam = tk.Button(self.btn_frame, text="⏹ STOP", command=self.stop_camera, 
                                      bg="#e74c3c", fg="white", font=("Arial", 10, "bold"), padx=15, state="disabled")
         self.btn_stop_cam.pack(side="left")
 
-        self.log_frame = tk.LabelFrame(self.root, text=" Log-Verlauf & Status ", bg="#f0f0f0")
+        self.log_frame = tk.LabelFrame(self.root, text=" Log Trace & Status ", bg="#f0f0f0")
         self.log_frame.pack(fill="x", padx=20, pady=10)
         
         self.log_text = tk.Text(self.log_frame, height=10, bg="#dfe6e9", font=("Courier", 9), state="disabled")
@@ -149,7 +149,7 @@ class ReceiverApp:
         if os.path.isfile(path): self.process_input_file(path)
 
     def open_file_dialog(self):
-        # Filter im Dialog für bessere UX
+        # Dialog filter for better UX
         file_types = [
             ("Media Files", "*.avi *.mp4 *.mkv *.mov *.jpg *.jpeg *.png *.bmp *.webp"),
             ("Videos", "*.avi *.mp4 *.mkv *.mov"),
@@ -167,17 +167,17 @@ class ReceiverApp:
         elif ext in self.valid_image_exts:
             self.process_image(path)
         else:
-            self.log_message(f"IGNORIERT: '{os.path.basename(path)}' ist kein unterstütztes Bild- oder Videoformat.")
-            self.status_var.set("UNTERSTÜTZTES FORMAT WÄHLEN")
+            self.log_message(f"IGNORED: '{os.path.basename(path)}' is not a supported image or video format.")
+            self.status_var.set("SELECT SUPPORTED FORMAT")
 
     def process_image(self, path):
         self.reset_ui_state()
         self.last_success = False
-        self.log_message(f"Scanne Bild: {os.path.basename(path)}")
+        self.log_message(f"Scanning Image: {os.path.basename(path)}")
         
         frame = cv2.imread(path)
         if frame is None:
-            self.log_message("FEHLER: Bild konnte nicht geladen werden.")
+            self.log_message("ERROR: Could not load image.")
             return
 
         for obj in decode(frame):
@@ -186,17 +186,17 @@ class ReceiverApp:
             except: continue
         
         if not self.last_success:
-            self.log_message("INFO: Keine QR-Daten im Bild gefunden.")
+            self.log_message("INFO: No QR data found in image.")
 
     def process_video(self, path):
         self.reset_ui_state()
         self.last_success = False
-        self.status_var.set("VIDEO-SCAN LÄUFT...")
-        self.log_message(f"Scanne Video: {os.path.basename(path)}")
+        self.status_var.set("VIDEO SCAN IN PROGRESS...")
+        self.log_message(f"Scanning Video: {os.path.basename(path)}")
         
         cap = cv2.VideoCapture(path)
         if not cap.isOpened():
-            self.log_message("FEHLER: Video konnte nicht geöffnet werden.")
+            self.log_message("ERROR: Could not open video.")
             return
 
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -221,7 +221,7 @@ class ReceiverApp:
 
         cap.release()
         if not self.last_success:
-            self.log_message("INFO: Scan beendet. Keine vollständigen Daten gefunden.")
+            self.log_message("INFO: Scan finished. No complete data found.")
 
     def start_camera(self):
         self.cap = cv2.VideoCapture(0)
@@ -230,8 +230,8 @@ class ReceiverApp:
             self.last_success = False
             self.btn_start_cam.config(state="disabled")
             self.btn_stop_cam.config(state="normal")
-            self.status_var.set("SCANNE LIVE-BILD...")
-            self.log_message("Kamera aktiv...")
+            self.status_var.set("SCANNING LIVE FEED...")
+            self.log_message("Camera active...")
             self.update_frame()
 
     def stop_camera(self):
@@ -239,7 +239,7 @@ class ReceiverApp:
         if self.cap: self.cap.release()
         self.btn_start_cam.config(state="normal")
         self.btn_stop_cam.config(state="disabled")
-        self.status_var.set("KAMERA AUS")
+        self.status_var.set("CAMERA OFF")
 
     def update_frame(self):
         if not self.is_cam_on: return
@@ -267,8 +267,8 @@ class ReceiverApp:
                 self.filename, self.total_chunks = parts[1], int(parts[2])
                 self.progress_bar["maximum"] = self.total_chunks
                 self.is_collecting = True
-                self.status_var.set(f"EMPFANGE: {self.filename}")
-                self.log_message(f"Daten gefunden: {self.filename} ({self.total_chunks} Chunks)")
+                self.status_var.set(f"RECEIVING: {self.filename}")
+                self.log_message(f"Data found: {self.filename} ({self.total_chunks} Chunks)")
             
             elif parts[0] == "DATA" and self.is_collecting:
                 idx = int(parts[1])
@@ -276,7 +276,7 @@ class ReceiverApp:
                     self.received_chunks[idx] = parts[2]
                     count = len(self.received_chunks)
                     self.progress_bar["value"] = count
-                    self.progress_var.set(f"Fortschritt: {count} / {self.total_chunks}")
+                    self.progress_var.set(f"Progress: {count} / {self.total_chunks}")
                     if count == self.total_chunks:
                         self.save_and_finish()
         except: pass
@@ -290,13 +290,13 @@ class ReceiverApp:
             
             self.last_success = True
             self.log_message("*" * 40)
-            self.log_message(f"ERFOLG: '{self.filename}' rekonstruiert.")
-            self.log_message(f"PFAD: {path}")
+            self.log_message(f"SUCCESS: '{self.filename}' reconstructed.")
+            self.log_message(f"PATH: {path}")
             self.log_message("*" * 40)
-            self.status_var.set("FERTIG: GESPEICHERT")
+            self.status_var.set("DONE: SAVED")
             self.reset_logic()
         except Exception as e:
-            self.log_message(f"FEHLER beim Speichern: {str(e)}")
+            self.log_message(f"ERROR while saving: {str(e)}")
 
     def log_message(self, msg):
         self.log_text.config(state="normal")
@@ -306,7 +306,7 @@ class ReceiverApp:
     def reset_ui_state(self):
         self.received_chunks = {}; self.is_collecting = False
         self.progress_bar["value"] = 0
-        self.progress_var.set("Fortschritt: 0 / 0 Chunks")
+        self.progress_var.set("Progress: 0 / 0 Chunks")
 
     def reset_logic(self):
         self.received_chunks = {}; self.is_collecting = False
@@ -315,7 +315,7 @@ class ReceiverApp:
     def _finalize_ui(self):
         if self.last_success:
             self.progress_bar["value"] = 0
-            self.status_var.set("BEREIT")
+            self.status_var.set("READY")
 
 if __name__ == "__main__":
     root = TkinterDnD.Tk() if DND_AVAILABLE else tk.Tk()
