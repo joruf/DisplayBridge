@@ -55,18 +55,38 @@ DEFAULT_FPS = 15
 # --- PART 1: DEPENDENCIES ---
 def ensure_dependencies():
     try:
+        # Check all critical imports
         import qrcode
         import cv2
+        import numpy
         from PIL import Image, ImageTk
         from tkinterdnd2 import DND_FILES, TkinterDnD
     except ImportError:
         try:
             print("Installing/Updating dependencies. Please wait...")
-            dependencies = ['qrcode[pil]', 'tkinterdnd2', 'opencv-python', 'pillow', 'numpy<1.28']
-            subprocess.run([sys.executable, '-m', 'pip', 'install', *dependencies, '--break-system-packages'], check=True)
+            # Note: We keep numpy<1.28 for compatibility with some opencv builds
+            dependencies = [
+                'qrcode[pil]', 
+                'tkinterdnd2-universal', # Improved cross-platform support
+                'opencv-python', 
+                'pillow', 
+                'numpy<1.28'
+            ]
+            
+            # Use --quiet to keep the console clean or remove for debugging
+            subprocess.run([
+                sys.executable, '-m', 'pip', 'install', 
+                *dependencies, 
+                '--break-system-packages'
+            ], check=True)
+            
+            # Restart the script to load the newly installed modules
             os.execv(sys.executable, ['python3'] + sys.argv)
         except Exception as e:
-            print(f"Failed to install dependencies: {e}"); sys.exit(1)
+            # Critical: Show error in console and keep it open for a moment
+            print(f"\nFATAL: Failed to install dependencies: {e}")
+            print("Please install manually: pip install qrcode[pil] tkinterdnd2-universal opencv-python pillow numpy")
+            sys.exit(1)
 
 ensure_dependencies()
 
