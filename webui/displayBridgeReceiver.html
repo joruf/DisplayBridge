@@ -87,6 +87,7 @@
         totalChunks: 0,
         expectedHash: "",
         chunks: {},
+        preStartBuffer: {}, // Buffer für Chunks, die vor dem START-Paket ankommen
         lastProcessedData: ""
     };
 
@@ -101,6 +102,7 @@
         state.totalChunks = 0;
         state.expectedHash = "";
         state.chunks = {};
+        state.preStartBuffer = {};
         state.lastProcessedData = "";
         
         progress.value = 0;
@@ -117,7 +119,12 @@
             const div = document.createElement('div');
             div.id = `chunk-${i}`;
             div.className = 'chunk';
-            div.innerText = i;
+            if (state.chunks[i]) {
+                div.classList.add('received');
+                div.innerText = "✓";
+            } else {
+                div.innerText = i;
+            }
             chunkGrid.appendChild(div);
         }
     }
@@ -127,7 +134,7 @@
             const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
             video.srcObject = stream;
             requestAnimationFrame(tick);
-            statusDiv.innerText = "Ready: Waiting for START QR";
+            statusDiv.innerText = "Ready: Waiting for QR Data";
         } catch (err) {
             statusDiv.innerText = "Camera Error: " + err.message;
         }
@@ -160,39 +167,60 @@
         
         // START Packet handling
         if (parts[0] === "START") {
-            // Restart automatically if a NEW start packet is detected
-            if (!state.isCollecting || parts[1] !== state.filename) {
-                state.filename = parts[1].replace(/[^-_\w.]/g, '');
+            const incomingFilename = parts[1].replace(/[^-_\w.]/g, '');
+            
+            if (!state.isCollecting || incomingFilename !== state.filename) {
+                state.filename = incomingFilename;
                 state.totalChunks = parseInt(parts[2]);
                 state.expectedHash = parts[3];
                 state.isCollecting = true;
-                state.chunks = {};
+                
+                // Übernehme bereits gepufferte Chunks in den Hauptspeicher
+                state.chunks = { ...state.preStartBuffer };
+                state.preStartBuffer = {};
                 
                 progress.max = state.totalChunks;
                 buildGrid(state.totalChunks);
                 
+                const count = Object.keys(state.chunks).length;
+                progress.value = count;
+                chunkCountDisp.innerText = `${count} / ${state.totalChunks}`;
+                
                 statusDiv.innerText = `Receiving: ${state.filename}`;
-                log(`Incoming: ${state.filename} (${state.totalChunks} chunks)`);
+                log(`Header received: ${state.filename} (${state.totalChunks} chunks)`);
+                
+                if (count === state.totalChunks) finishDownload();
             }
             currentIdDisp.innerText = "START";
         } 
         
         // DATA Packet handling
-        else if (parts[0] === "DATA" && state.isCollecting) {
+        else if (parts[0] === "DATA") {
             const idx = parseInt(parts[1]);
-            currentIdDisp.innerText = idx; // Always show currently detected ID
+            const payload = parts[2];
+            currentIdDisp.innerText = idx;
 
-            if (idx >= 0 && idx < state.totalChunks && !state.chunks[idx]) {
-                state.chunks[idx] = parts[2];
-                
-                const box = document.getElementById(`chunk-${idx}`);
-                if (box) { box.classList.add('received'); box.innerText = "✓"; }
+            if (state.isCollecting) {
+                // Normaler Modus: Metadaten sind bekannt
+                if (idx >= 0 && idx < state.totalChunks && !state.chunks[idx]) {
+                    state.chunks[idx] = payload;
+                    
+                    const box = document.getElementById(`chunk-${idx}`);
+                    if (box) { box.classList.add('received'); box.innerText = "✓"; }
 
-                const count = Object.keys(state.chunks).length;
-                progress.value = count;
-                chunkCountDisp.innerText = `${count} / ${state.totalChunks}`;
+                    const count = Object.keys(state.chunks).length;
+                    progress.value = count;
+                    chunkCountDisp.innerText = `${count} / ${state.totalChunks}`;
 
-                if (count === state.totalChunks) finishDownload();
+                    if (count === state.totalChunks) finishDownload();
+                }
+            } else {
+                // "Blind"-Modus: Wir wissen noch nicht, wie viele Chunks es gibt
+                if (!state.preStartBuffer[idx]) {
+                    state.preStartBuffer[idx] = payload;
+                    statusDiv.innerText = "Buffering data (waiting for START)...";
+                    chunkCountDisp.innerText = `${Object.keys(state.preStartBuffer).length} / ?`;
+                }
             }
         }
     }
@@ -201,7 +229,13 @@
         statusDiv.innerText = "Verifying Integrity...";
         try {
             let b64 = "";
-            for (let i = 0; i < state.totalChunks; i++) b64 += state.chunks[i];
+            for (let i = 0; i < state.totalChunks; i++) {
+                if (!state.chunks[i]) {
+                    log("❌ Missing chunk " + i);
+                    return;
+                }
+                b64 += state.chunks[i];
+            }
             
             const binaryStr = atob(b64);
             const bytes = new Uint8Array(binaryStr.length);
