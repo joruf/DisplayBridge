@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>DisplayBridge Web-Receiver</title>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; text-align: center; padding: 20px; color: #333; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+        #preview { width: 100%; max-width: 480px; background: #000; border-radius: 12px; margin-bottom: 10px; }
+        
+        /* Chunk Grid */
+        #chunk-grid { 
+            display: flex; flex-wrap: wrap; justify-content: center; 
+            gap: 5px; margin: 20px auto; padding: 15px; 
+            background: #f8f9fa; border-radius: 8px; border: 1px solid #ddd;
+            max-height: 200px; overflow-y: auto;
+        }
+        .chunk {
+            width: 20px; height: 20px; line-height: 20px; font-size: 8px;
+            background: #dee2e6; border-radius: 3px; color: #adb5bd;
+            transition: all 0.2s; border: 1px solid #ced4da;
+        }
+        .chunk.received {
+            background: #28a745; color: white; border-color: #1e7e34;
+            font-weight: bold; transform: scale(1.1);
+        }
+
+        #log { height: 100px; overflow-y: scroll; background: #212529; color: #20c997; text-align: left; padding: 10px; margin-top: 20px; font-family: monospace; font-size: 11px; border-radius: 5px; }
+        .status { font-weight: bold; color: #dc3545; font-size: 1.2em; margin: 15px; }
+        progress { width: 100%; height: 20px; }
+        
+        .btn-reset {
+            background-color: #dc3545;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            margin-bottom: 10px;
+            transition: background 0.3s;
+        }
+        .btn-reset:hover { background-color: #a71d2a; }
+
+        .footer { margin-top: 20px; font-size: 0.9em; color: #6c757d; }
+        a { color: #007bff; text-decoration: none; }
+        #current-id { font-weight: bold; color: #007bff; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>DisplayBridge Receiver</h2>
+    <p>Reconstruct files from QR-code streams via webcam.</p>
+    
+    <video id="preview" autoplay playsinline></video>
+    
+    <div id="status" class="status">Requesting Camera...</div>
+
+    <button class="btn-reset" onclick="resetReceiver()">Reset / New File</button>
+    
+    <progress id="progress" value="0" max="100"></progress>
+    <div id="counter">Current ID: <span id="current-id">-</span> | Total Chunks: <span id="chunk-count">0 / 0</span></div>
+
+    <div id="chunk-grid"></div>
+
+    <div id="log"></div>
+
+    <div class="footer">
+        Generator: <a href="https://github.com/joruf/DisplayBridge" target="_blank">github.com/joruf/DisplayBridge</a>
+    </div>
+</div>
+
+<script>
+    const video = document.getElementById('preview');
+    const logDiv = document.getElementById('log');
+    const statusDiv = document.getElementById('status');
+    const progress = document.getElementById('progress');
+    const chunkCountDisp = document.getElementById('chunk-count');
+    const currentIdDisp = document.getElementById('current-id');
+    const chunkGrid = document.getElementById('chunk-grid');
+
+    let state = {
+        isCollecting: false,
+        filename: "",
+        totalChunks: 0,
+        expectedHash: "",
+        chunks: {},
+        lastProcessedData: ""
+    };
+
+    function log(msg) {
+        const time = new Date().toLocaleTimeString();
+        logDiv.innerHTML = `[${time}] ${msg}<br>` + logDiv.innerHTML;
+    }
+
+    function resetReceiver() {
+        state.isCollecting = false;
+        state.filename = "";
+        state.totalChunks = 0;
+        state.expectedHash = "";
+        state.chunks = {};
+        state.lastProcessedData = "";
+        
+        progress.value = 0;
+        chunkGrid.innerHTML = "";
+        chunkCountDisp.innerText = "0 / 0";
+        currentIdDisp.innerText = "-";
+        statusDiv.innerText = "Reset complete. Waiting for START QR...";
+        log("🔄 Receiver reset by user.");
+    }
+
+    function buildGrid(total) {
+        chunkGrid.innerHTML = "";
+        for (let i = 0; i < total; i++) {
+            const div = document.createElement('div');
+            div.id = `chunk-${i}`;
+            div.className = 'chunk';
+            div.innerText = i;
+            chunkGrid.appendChild(div);
+        }
+    }
+
+    async function initCam() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+            video.srcObject = stream;
+            requestAnimationFrame(tick);
+            statusDiv.innerText = "Ready: Waiting for START QR";
+        } catch (err) {
+            statusDiv.innerText = "Camera Error: " + err.message;
+        }
+    }
+
+    async function computeSHA256(uint8Array) {
+        const hashBuffer = await crypto.subtle.digest('SHA-256', uint8Array);
+        return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    function tick() {
+        if (video.readyState === video.HAVE_ENOUGH_DATA) {
+            const canvas = document.createElement("canvas");
+            canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(video, 0, 0);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const code = jsQR(imageData.data, imageData.width, imageData.height);
+
+            if (code && code.data !== state.lastProcessedData) {
+                processData(code.data);
+                state.lastProcessedData = code.data;
+            }
+        }
+        requestAnimationFrame(tick);
+    }
+
+    async function processData(raw) {
+        const parts = raw.split('|');
+        
+        // START Packet handling
+        if (parts[0] === "START") {
+            // Restart automatically if a NEW start packet is detected
+            if (!state.isCollecting || parts[1] !== state.filename) {
+                state.filename = parts[1].replace(/[^-_\w.]/g, '');
+                state.totalChunks = parseInt(parts[2]);
+                state.expectedHash = parts[3];
+                state.isCollecting = true;
+                state.chunks = {};
+                
+                progress.max = state.totalChunks;
+                buildGrid(state.totalChunks);
+                
+                statusDiv.innerText = `Receiving: ${state.filename}`;
+                log(`🚀 Incoming: ${state.filename} (${state.totalChunks} chunks)`);
+            }
+            currentIdDisp.innerText = "START";
+        } 
+        
+        // DATA Packet handling
+        else if (parts[0] === "DATA" && state.isCollecting) {
+            const idx = parseInt(parts[1]);
+            currentIdDisp.innerText = idx; // Always show currently detected ID
+
+            if (idx >= 0 && idx < state.totalChunks && !state.chunks[idx]) {
+                state.chunks[idx] = parts[2];
+                
+                const box = document.getElementById(`chunk-${idx}`);
+                if (box) { box.classList.add('received'); box.innerText = "✓"; }
+
+                const count = Object.keys(state.chunks).length;
+                progress.value = count;
+                chunkCountDisp.innerText = `${count} / ${state.totalChunks}`;
+
+                if (count === state.totalChunks) finishDownload();
+            }
+        }
+    }
+
+    async function finishDownload() {
+        statusDiv.innerText = "Verifying Integrity...";
+        try {
+            let b64 = "";
+            for (let i = 0; i < state.totalChunks; i++) b64 += state.chunks[i];
+            
+            const binaryStr = atob(b64);
+            const bytes = new Uint8Array(binaryStr.length);
+            for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+
+            const actualHash = await computeSHA256(bytes);
+            if (actualHash !== state.expectedHash) {
+                log("❌ ERROR: Hash mismatch!");
+                statusDiv.innerText = "Corrupt Data Detected";
+                return;
+            }
+
+            const blob = new Blob([bytes]);
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = state.filename;
+            document.body.appendChild(a); a.click();
+            
+            log("✅ Success: File saved.");
+            statusDiv.innerText = "Transfer Complete!";
+            state.isCollecting = false;
+        } catch (e) {
+            log("❌ Error: " + e.message);
+        }
+    }
+
+    initCam();
+</script>
+</body>
+</html>

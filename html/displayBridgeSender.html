@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>DisplayBridge Web-Sender</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; text-align: center; padding: 20px; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+        
+        #qrcode { 
+            margin: 20px auto; padding: 20px; background: white; 
+            display: inline-block; border: 1px solid #ddd; border-radius: 10px;
+            min-height: 300px; min-width: 300px;
+        }
+
+        .controls { 
+            margin: 20px 0; display: flex; flex-direction: column; 
+            gap: 15px; align-items: center; background: #f8f9fa;
+            padding: 20px; border-radius: 10px; border: 1px solid #eee;
+        }
+
+        .setting-group { width: 100%; display: flex; flex-direction: column; gap: 8px; text-align: left; }
+        
+        .radio-group { display: flex; gap: 10px; flex-wrap: wrap; justify-content: space-between; }
+        .radio-option {
+            flex: 1; min-width: 80px; position: relative;
+            background: #fff; border: 1px solid #ddd; border-radius: 6px;
+            padding: 8px; text-align: center; cursor: pointer; transition: all 0.2s;
+        }
+        .radio-option:hover { background: #e9ecef; }
+        .radio-option input { position: absolute; opacity: 0; cursor: pointer; }
+        .radio-option.active { background: #007bff; color: white; border-color: #0056b3; }
+
+        button { 
+            padding: 12px 25px; font-weight: bold; cursor: pointer; border-radius: 8px; 
+            border: none; background: #28a745; color: white; transition: all 0.3s; 
+            width: 100%; font-size: 1em; margin-top: 10px;
+        }
+        button:hover { background: #218838; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        button#stopBtn { background: #dc3545; }
+        button#stopBtn:hover { background: #c82333; }
+
+        #status { font-weight: bold; color: #007bff; margin: 10px; font-size: 1.1em; }
+        #packetInfo { font-family: 'Courier New', monospace; font-size: 14px; color: #555; background: #eee; padding: 5px; border-radius: 4px; }
+        
+        input[type="file"] { border: 1px dashed #bbb; padding: 15px; width: 90%; border-radius: 8px; cursor: pointer; background: white; }
+        select { padding: 8px; border-radius: 4px; border: 1px solid #ddd; background: white; }
+
+        .footer { margin-top: 25px; font-size: 0.85em; color: #6c757d; }
+        a { color: #007bff; text-decoration: none; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>DisplayBridge Sender</h2>
+    <p>Convert files into a timed QR-code sequence.</p>
+
+    <div class="controls">
+        <div class="setting-group">
+            <label><strong>1. Select File (Prepares Header instantly):</strong></label>
+            <input type="file" id="fileInput">
+        </div>
+
+        <div class="setting-group">
+            <label><strong>2. Chunk Size:</strong></label>
+            <select id="chunkSize">
+                <option value="200" selected>200 (Safe)</option>
+                <option value="450">450 (Standard)</option>
+                <option value="800">800 (High Density)</option>
+            </select>
+        </div>
+
+        <div class="setting-group">
+            <label><strong>3. Speed Presets (FPS):</strong></label>
+            <div class="radio-group" id="speedPresets">
+                <label class="radio-option"><input type="radio" name="fps" value="2"> 2 FPS</label>
+                <label class="radio-option"><input type="radio" name="fps" value="4"> 4 FPS</label>
+                <label class="radio-option"><input type="radio" name="fps" value="8"> 8 FPS</label>
+                <label class="radio-option active"><input type="radio" name="fps" value="15" checked> 15 FPS</label>
+                <label class="radio-option"><input type="radio" name="fps" value="30"> 30 FPS</label>
+            </div>
+        </div>
+
+        <div style="display: flex; gap: 10px; width: 100%;">
+            <button id="startBtn">▶ START STREAM</button>
+            <button id="stopBtn" disabled>⏹ STOP</button>
+        </div>
+    </div>
+
+    <div id="status">Status: Waiting for file...</div>
+    <div id="qrcode"></div>
+    <div id="packetInfo">Please select a file to begin.</div>
+
+    <div class="footer">
+        Generator: <a href="https://github.com/joruf/DisplayBridge" target="_blank">github.com/joruf/DisplayBridge</a>
+    </div>
+</div>
+
+<script>
+    const fileInput = document.getElementById('fileInput');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const statusDiv = document.getElementById('status');
+    const packetInfo = document.getElementById('packetInfo');
+    const qrcodeDiv = document.getElementById('qrcode');
+    const chunkSizeSelect = document.getElementById('chunkSize');
+    const speedPresets = document.querySelectorAll('input[name="fps"]');
+
+    let streamInterval = null;
+    let currentPacketIdx = 0;
+    let allPackets = [];
+    
+    let qr = new QRCode(qrcodeDiv, { width: 300, height: 300, correctLevel: QRCode.CorrectLevel.L });
+
+    // Live update FPS
+    speedPresets.forEach(radio => {
+        radio.addEventListener('change', (e) => {
+            document.querySelectorAll('.radio-option').forEach(el => el.classList.remove('active'));
+            e.target.parentElement.classList.add('active');
+            if (streamInterval) startLoop();
+        });
+    });
+
+    // Handle ChunkSize change after file is selected
+    chunkSizeSelect.addEventListener('change', () => {
+        if (fileInput.files[0]) prepareFile();
+    });
+
+    async function computeSHA256(buffer) {
+        const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+        return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    async function prepareFile() {
+        const file = fileInput.files[0];
+        if (!file) return;
+
+        statusDiv.innerText = "Status: Preparing...";
+        
+        const arrayBuffer = await file.arrayBuffer();
+        const hash = await computeSHA256(arrayBuffer);
+        const binary = Array.from(new Uint8Array(arrayBuffer)).map(b => String.fromCharCode(b)).join('');
+        const base64String = btoa(binary);
+        
+        const size = parseInt(chunkSizeSelect.value);
+        const totalChunks = Math.ceil(base64String.length / size);
+        
+        allPackets = [`START|${file.name}|${totalChunks}|${hash}`];
+        for (let i = 0; i < base64String.length; i += size) {
+            allPackets.push(`DATA|${Math.floor(i/size)}|${base64String.substring(i, i + size)}`);
+        }
+
+        // Show FIRST Packet immediately
+        currentPacketIdx = 0;
+        qr.makeCode(allPackets[0]);
+        statusDiv.innerText = "Status: Ready to Stream";
+        packetInfo.innerText = "Current: [START] Packet (Ready)";
+    }
+
+    function startLoop() {
+        if (streamInterval) clearInterval(streamInterval);
+        
+        const selectedFPS = document.querySelector('input[name="fps"]:checked').value;
+        const msPerFrame = 1000 / parseInt(selectedFPS);
+        
+        streamInterval = setInterval(() => {
+            if (allPackets.length === 0) return;
+            
+            qr.makeCode(allPackets[currentPacketIdx]);
+            
+            packetInfo.innerText = currentPacketIdx === 0 
+                ? "Current: [START] Packet" 
+                : `Current: [Chunks] ${currentPacketIdx} / ${allPackets.length - 1}`;
+            
+            currentPacketIdx = (currentPacketIdx + 1) % allPackets.length;
+        }, msPerFrame);
+    }
+
+    // Trigger preparation when file is chosen
+    fileInput.addEventListener('change', prepareFile);
+
+    startBtn.addEventListener('click', () => {
+        if (allPackets.length === 0) {
+            alert("Please select a file first!");
+            return;
+        }
+
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        fileInput.disabled = true;
+        chunkSizeSelect.disabled = true;
+        statusDiv.innerText = "Status: STREAMING...";
+        startLoop();
+    });
+
+    stopBtn.addEventListener('click', () => {
+        clearInterval(streamInterval);
+        streamInterval = null;
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        fileInput.disabled = false;
+        chunkSizeSelect.disabled = false;
+        statusDiv.innerText = "Status: Stopped (Showing Header)";
+        
+        // Show Header again when stopped so receiver can sync
+        currentPacketIdx = 0;
+        if(allPackets.length > 0) qr.makeCode(allPackets[0]);
+    });
+</script>
+</body>
+</html>
