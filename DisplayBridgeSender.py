@@ -48,11 +48,14 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import numpy as np
 
+# Maximum allowed file size in bytes (default: 500 KB)
+MAX_FILE_SIZE_BYTES = 500 * 1024
+
 # Speed presets: (Label, FPS-Value)
 SPEED_PRESETS = [
     ("2 FPS", 2), ("4 FPS", 4), ("8 FPS", 8), ("15 FPS", 15), ("30 FPS", 30)
 ]
-DEFAULT_FPS = 15 
+DEFAULT_FPS = 15
 
 # --- PART 1: DEPENDENCIES ---
 def ensure_dependencies():
@@ -177,6 +180,20 @@ class DisplayBridgeApp:
             if path: self.process_file(path)
 
     def process_file(self, path):
+        # Check file size before processing
+        file_size = os.path.getsize(path)
+        if file_size > MAX_FILE_SIZE_BYTES:
+            max_kb = MAX_FILE_SIZE_BYTES // 1024
+            actual_kb = file_size / 1024
+            messagebox.showerror(
+                "File Too Large",
+                f"The selected file exceeds the maximum allowed file size.\n\n"
+                f"Maximum size: {max_kb} KB\n"
+                f"File size:       {actual_kb:.1f} KB\n\n"
+                f"Please select a smaller file."
+            )
+            return
+
         self.clear_all(); self.filename = os.path.basename(path); self.path_var.set(f"Path: {path}")
         try:
             with open(path, "rb") as f: b64_str = base64.b64encode(f.read()).decode('utf-8')
