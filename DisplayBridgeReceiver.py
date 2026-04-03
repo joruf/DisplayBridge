@@ -3,34 +3,34 @@
 Displaybridge - RECEIVER
 ========================
 DESCRIPTION:
-This application acts as a digital bridge to reconstruct files transmitted 
-via QR code sequences. It captures visual data through a live webcam feed 
+This application acts as a digital bridge to reconstruct files transmitted
+via QR code sequences. It captures visual data through a live webcam feed
 or by processing existing video/image files to retrieve encoded data packets.
 
 TECHNICAL OPERATION:
-1.  ACQUISITION: 
+1.  ACQUISITION:
     - Live Mode: Utilizes OpenCV (cv2) to capture real-time camera frames.
-    - File Mode: Scans every frame of a video or a static image using a 
+    - File Mode: Scans every frame of a video or a static image using a
       frame-by-frame iteration logic.
-2.  DECODING: 
-    - Uses the ZBar library (pyzbar) to identify and decode QR codes within 
+2.  DECODING:
+    - Uses the ZBar library (pyzbar) to identify and decode QR codes within
       each frame.
     - Extracts structured data strings formatted as 'TYPE|METADATA|PAYLOAD'.
 3.  RECONSTRUCTION:
-    - Buffers incoming Base64-encoded chunks into a dictionary to handle 
+    - Buffers incoming Base64-encoded chunks into a dictionary to handle
       out-of-order delivery or redundant captures.
-    - Once the total chunk count (defined in the 'START' packet) is reached, 
-      the application concatenates the segments and decodes the Base64 
+    - Once the total chunk count (defined in the 'START' packet) is reached,
+      the application concatenates the segments and decodes the Base64
       string back into the original binary file.
-4.  AUTO-SAVE: 
-    - Automatically writes the reconstructed file to the user's ~/Downloads 
+4.  AUTO-SAVE:
+    - Automatically writes the reconstructed file to the user's ~/Downloads
       directory using the original filename.
 
 FUNCTIONAL FEATURES:
 - DUAL INPUT: Supports both real-time webcam scanning and file-based import.
-- SMART FILTER: Validates file extensions (Video/Image) for Drag & Drop 
+- SMART FILTER: Validates file extensions (Video/Image) for Drag & Drop
   and file selection to ensure system stability.
-- UI FEEDBACK: Real-time progress tracking, visual QR detection markers, 
+- UI FEEDBACK: Real-time progress tracking, visual QR detection markers,
   and a persistent log area for status and error reporting.
 - DRAG & DROP: Integrated TkinterDnD support for intuitive file processing.
 """

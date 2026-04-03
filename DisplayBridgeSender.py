@@ -3,26 +3,26 @@
 DisplayBridge - SENDER
 ======================
 DESCRIPTION:
-This application converts any binary file into a high-speed sequence of 
-QR codes. It acts as the transmission source, allowing data to be 
+This application converts any binary file into a high-speed sequence of
+QR codes. It acts as the transmission source, allowing data to be
 "beamed" from a screen to a receiver (camera or video file).
 
 TECHNICAL OPERATION:
 1.  ENCODING & FRAGMENTATION:
-    - Reads the input file as raw binary and encodes it into a single 
+    - Reads the input file as raw binary and encodes it into a single
       Base64 string to ensure 7-bit ASCII compatibility for QR generation.
-    - Slices the string into fixed-size segments (chunks) to fit within 
+    - Slices the string into fixed-size segments (chunks) to fit within
       QR code density limits.
 2.  PROTOCOL WRAPPING:
-    - START Packet: Generates a header frame containing the original 
+    - START Packet: Generates a header frame containing the original
       filename and the total number of expected chunks.
-    - DATA Packets: Wraps each payload chunk with a sequence index 
+    - DATA Packets: Wraps each payload chunk with a sequence index
       ('DATA|index|payload') to allow for unordered reconstruction.
 3.  RELIABLE VIDEO EXPORT:
-    - Frame Redundancy: Duplicates the first (Header) and last (Footer) 
-      frames in the video export to ensure the receiver catches the 
+    - Frame Redundancy: Duplicates the first (Header) and last (Footer)
+      frames in the video export to ensure the receiver catches the
       critical start/end signals.
-    - MJPG Implementation: Uses the Motion JPEG codec at 100% quality 
+    - MJPG Implementation: Uses the Motion JPEG codec at 100% quality
       to provide lossless intra-frame compression, ensuring QR edges 
       remain perfectly sharp for scanning.
 4.  VISUAL OPTIMIZATION:
@@ -34,9 +34,9 @@ TECHNICAL OPERATION:
 
 FUNCTIONAL FEATURES:
 - DRAG & DROP: Built with TkinterDnD for seamless file importing.
-- DUAL OUTPUT: Offers both a live on-screen loop animation and an 
+- DUAL OUTPUT: Offers both a live on-screen loop animation and an
   optimized .avi video export.
-- RELIABILITY FOCUS: Automated redundancy and sharp-edge rendering 
+- RELIABILITY FOCUS: Automated redundancy and sharp-edge rendering
   specifically tuned for 2026-era high-res displays.
 """
 
