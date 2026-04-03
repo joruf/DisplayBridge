@@ -6,7 +6,7 @@
 
 ## WebUI Interfaces
 You can use the browser-based version without any installation:
-🚀 **Try the Live Demo:** [displaybridge.loresoft.de](https://displaybridge.loresoft.de)
+**Try the Live Demo:** [https://displaybridge.loresoft.de](https://displaybridge.loresoft.de)
 
 ---
 
