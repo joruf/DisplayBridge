@@ -10,28 +10,25 @@ or by processing existing video/image files to retrieve encoded data packets.
 TECHNICAL OPERATION:
 1.  ACQUISITION:
     - Live Mode: Utilizes OpenCV (cv2) to capture real-time camera frames.
-    - File Mode: Scans every frame of a video or a static image using a
-      frame-by-frame iteration logic.
+    - File Mode: Scans every frame of a video or a static image using a frame-by-frame iteration logic.
 2.  DECODING:
-    - Uses the ZBar library (pyzbar) to identify and decode QR codes within
-      each frame.
+    - Uses the ZBar library (pyzbar) to identify and decode QR codes within each frame.
     - Extracts structured data strings formatted as 'TYPE|METADATA|PAYLOAD'.
 3.  RECONSTRUCTION:
-    - Buffers incoming Base64-encoded chunks into a dictionary to handle
-      out-of-order delivery or redundant captures.
-    - Once the total chunk count (defined in the 'START' packet) is reached,
-      the application concatenates the segments and decodes the Base64
-      string back into the original binary file.
+    - Buffers incoming Base64-encoded chunks into a dictionary to handle out-of-order delivery or redundant captures.
+    - Once the total chunk count (defined in the 'START' packet) is reached, the application concatenates the segments and decodes the Base64 string back into the original binary file.
 4.  AUTO-SAVE:
-    - Automatically writes the reconstructed file to the user's ~/Downloads
-      directory using the original filename.
+    - Automatically writes the reconstructed file to the user's ~/Downloads directory using the original filename.
+5.  SECURITY ARCHITECTURE:
+	a. INPUT SANITIZATION: Uses Regex to strip potentially malicious characters from filenames, preventing shell injection and filesystem attacks.
+	b. PATH TRAVERSAL PROTECTION: Forces filenames into a flat structure using os.path.basename, ensuring files cannot be written outside the target directory.
+	c. RESOURCE QUOTAS: Implements MAX_CHUNKS and MAX_FILE_SIZE_MB to prevent Memory-Exhaustion (DoS) attacks via manipulated QR metadata.
+	d. TYPE WHITELISTING: Restricts reconstruction to a predefined list of safe file extensions (.jpg, .pdf, .txt, etc.).
 
 FUNCTIONAL FEATURES:
 - DUAL INPUT: Supports both real-time webcam scanning and file-based import.
-- SMART FILTER: Validates file extensions (Video/Image) for Drag & Drop
-  and file selection to ensure system stability.
-- UI FEEDBACK: Real-time progress tracking, visual QR detection markers,
-  and a persistent log area for status and error reporting.
+- SMART FILTER: Validates file extensions (Video/Image) for Drag & Drop and file selection to ensure system stability.
+- UI FEEDBACK: Real-time progress tracking, visual QR detection markers, and a persistent log area for status and error reporting.
 - DRAG & DROP: Integrated TkinterDnD support for intuitive file processing.
 """
 
@@ -39,6 +36,7 @@ import subprocess
 import sys
 import os
 import base64
+import re  # Added for Sanitizing
 import tkinter as tk
 from tkinter import ttk, filedialog
 import numpy as np
@@ -79,10 +77,14 @@ class ReceiverApp:
         self.root.geometry("900x1000")
         self.root.configure(bg="#f5f5f5")
 
-        # Allowed formats
+        # Security limits
+        self.MAX_FILE_SIZE_MB = 200
+        self.MAX_CHUNKS = 10000
+        self.ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.pdf', '.txt', '.zip'} 
+
+        # Logic State
         self.valid_video_exts = {'.avi', '.mp4', '.mkv', '.mov', '.wmv'}
         self.valid_image_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.webp', '.tiff'}
-
         self.filename = ""
         self.total_chunks = 0
         self.received_chunks = {}
@@ -168,7 +170,7 @@ class ReceiverApp:
 
     def open_file_dialog(self):
         file_types = [("Media Files", "*.avi *.mp4 *.mkv *.mov *.jpg *.jpeg *.png *.bmp *.webp")]
-        path = filedialog.askopenfilename(filetypes=file_types)
+        path = filedialog.askopenfilename(file_types=file_types)
         if path: self.process_input_file(path)
 
     def process_input_file(self, path):
@@ -255,23 +257,60 @@ class ReceiverApp:
     def process_qr_data(self, data):
         try:
             parts = data.split('|')
+            
+            # 1. VALIDATION OF START PACKET
             if parts[0] == "START" and not self.is_collecting:
-                self.filename, self.total_chunks = parts[1], int(parts[2])
-                self.progress_bar["maximum"] = self.total_chunks
+                raw_filename = parts[1]
+                num_chunks = int(parts[2])
+
+                if num_chunks > self.MAX_CHUNKS or num_chunks <= 0:
+                    self.log_message("SECURITY ALERT: Invalid chunk count rejected.")
+                    return
+
+                clean_filename = os.path.basename(raw_filename)
+                clean_filename = re.sub(r'(?u)[^-\w.]', '', clean_filename)
+                
+                ext = os.path.splitext(clean_filename)[1].lower()
+                if ext not in self.ALLOWED_EXTENSIONS:
+                    self.log_message(f"SECURITY ALERT: Extension {ext} not allowed.")
+                    return
+
+                self.filename = clean_filename
+                self.total_chunks = num_chunks
+                
+                # Progressbar korrekt initialisieren
+                self.progress_bar.config(maximum=self.total_chunks, value=0)
+                
                 self.is_collecting = True
                 self.status_var.set(f"Status: Receiving {self.filename}")
                 self.log_message(f"Detected: {self.filename} ({self.total_chunks} chunks)")
             
+            # 2. VALIDATION OF DATA PACKETS
             elif parts[0] == "DATA" and self.is_collecting:
                 idx = int(parts[1])
+                payload = parts[2]
+
+                if not (0 <= idx < self.total_chunks):
+                    return
+
                 if idx not in self.received_chunks:
-                    self.received_chunks[idx] = parts[2]
+                    if (len(self.received_chunks) * 3000) > (self.MAX_FILE_SIZE_MB * 1024 * 1024):
+                        self.log_message("SECURITY ALERT: File size limit exceeded.")
+                        self.reset_ui_state()
+                        return
+
+                    self.received_chunks[idx] = payload
                     count = len(self.received_chunks)
+                    
+                    # Fortschritt aktualisieren
                     self.progress_bar["value"] = count
                     self.progress_var.set(f"{count} / {self.total_chunks}")
+                    self.root.update_idletasks() # Erzwingt das visuelle Update der UI
+                    
                     if count == self.total_chunks:
                         self.save_and_finish()
-        except: pass
+        except Exception:
+            self.log_message(f"Security Filter: Invalid packet discarded.")
 
     def save_and_finish(self):
         try:
