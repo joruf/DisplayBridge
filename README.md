@@ -14,6 +14,21 @@
 - **Drag & Drop** – Easy file handling with `TkinterDnD` integration.
 - **Auto-Dependency Management** – Checks and installs required Python libraries on startup.
 
+
+---
+
+## Overview
+
+### Sender Interface
+The **Sender** encodes your files into a high-speed QR stream. Use the FPS presets to match your camera's capability.
+![DisplayBridge Sender](./assets/DisplayBridgeSender.png)
+
+### Receiver Interface
+The **Receiver** captures the stream via webcam or file import. The real-time log tracks every decoded chunk.
+![DisplayBridge Receiver](./assets/DisplayBridgeReceiver.png)
+
+---
+
 ---
 
 ## Platform Support
