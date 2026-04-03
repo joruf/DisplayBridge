@@ -35,13 +35,21 @@ Before transmission, the **Sender** generates a SHA-256 fingerprint. The **Recei
 
 ## Overview
 
-### Sender Interface
+### Python Sender Interface
 The **Sender** encodes your files into a high-speed QR stream. Use the FPS presets to match your camera's capability.
-![DisplayBridge Sender](./assets/DisplayBridgeSender.png)
+![DisplayBridge Sender](./assets/DisplayBridgeSender-Python.png)
 
-### Receiver Interface
+### Python Receiver Interface
 The **Receiver** captures the stream via webcam or file import. The real-time log tracks every decoded chunk.
-![DisplayBridge Receiver](./assets/DisplayBridgeReceiver.png)
+![DisplayBridge Receiver](./assets/DisplayBridgeReceiver-Python.png)
+
+### WebUI Sender Interface
+The **Sender** encodes your files into a high-speed QR stream. Use the FPS presets to match your camera's capability.
+![DisplayBridge Sender](./assets/DisplayBridgeSender-WebUI.png)
+
+### WebUI Receiver Interface
+The **Receiver** captures the stream via webcam or file import. The real-time log tracks every decoded chunk.
+![DisplayBridge Receiver](./assets/DisplayBridgeReceiver-WebUI.png)
 
 ---
 

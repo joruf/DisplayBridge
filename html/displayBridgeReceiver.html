@@ -108,7 +108,7 @@
         chunkCountDisp.innerText = "0 / 0";
         currentIdDisp.innerText = "-";
         statusDiv.innerText = "Reset complete. Waiting for START QR...";
-        log("🔄 Receiver reset by user.");
+        log("Receiver reset by user.");
     }
 
     function buildGrid(total) {
@@ -172,7 +172,7 @@
                 buildGrid(state.totalChunks);
                 
                 statusDiv.innerText = `Receiving: ${state.filename}`;
-                log(`🚀 Incoming: ${state.filename} (${state.totalChunks} chunks)`);
+                log(`Incoming: ${state.filename} (${state.totalChunks} chunks)`);
             }
             currentIdDisp.innerText = "START";
         } 
