@@ -21,6 +21,10 @@
             background: #dee2e6; border-radius: 3px; color: #adb5bd;
             transition: all 0.2s; border: 1px solid #ced4da;
         }
+        .chunk.active {
+			border: 1px solid #ff0000 !important;
+			box-shadow: 0 0 5px rgba(255, 0, 0, 0.5);
+		}
         .chunk.received {
             background: #28a745; color: white; border-color: #1e7e34;
             font-weight: bold; transform: scale(1.1);
@@ -201,12 +205,18 @@
             currentIdDisp.innerText = idx;
 
             if (state.isCollecting) {
-                // Normaler Modus: Metadaten sind bekannt
+                // Visuelles Feedback: Aktiven Chunk markieren
+                document.querySelectorAll('.chunk').forEach(el => el.classList.remove('active'));
+                const currentBox = document.getElementById(`chunk-${idx}`);
+                if (currentBox) currentBox.classList.add('active');
+
                 if (idx >= 0 && idx < state.totalChunks && !state.chunks[idx]) {
                     state.chunks[idx] = payload;
                     
-                    const box = document.getElementById(`chunk-${idx}`);
-                    if (box) { box.classList.add('received'); box.innerText = "✓"; }
+                    if (currentBox) { 
+                        currentBox.classList.add('received'); 
+                        currentBox.innerText = "✓"; 
+                    }
 
                     const count = Object.keys(state.chunks).length;
                     progress.value = count;
