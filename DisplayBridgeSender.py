@@ -47,6 +47,8 @@ import base64
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import numpy as np
+# NEU: Für die parallele Verarbeitung
+from concurrent.futures import ProcessPoolExecutor
 
 # Maximum allowed file size in bytes (default: 500 KB)
 MAX_FILE_SIZE_BYTES = 500 * 1024
@@ -80,11 +82,20 @@ from qrcode import QRCode, constants
 from PIL import Image, ImageTk
 from tkinterdnd2 import DND_FILES, TkinterDnD
 
+# --- NEU: Globale Funktion für die Worker-Prozesse ---
+# Muss außerhalb der Klasse stehen, damit sie "picklable" für die Parallelisierung ist.
+def _worker_generate_qr(data):
+    qr = QRCode(version=None, error_correction=constants.ERROR_CORRECT_L, box_size=10, border=2)
+    qr.add_data(data)
+    qr.make(fit=True)
+    # Rückgabe als RGB-Image
+    return qr.make_image(fill_color="black", back_color="white").convert('RGB')
+
 # --- PART 2: MAIN APPLICATION ---
 class DisplayBridgeApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("DisplayBridge v4.2 - Reliability QR Sender")
+        self.root.title("DisplayBridge - Sender")
         self.root.geometry("900x1000")
         self.root.configure(bg="#f5f5f5")
         
@@ -134,7 +145,6 @@ class DisplayBridgeApp:
         self.btn_stop = tk.Button(self.btn_frame, text="⏸ STOP", bg="#fff3cd", command=self.stop_anim, state="disabled", width=10)
         self.btn_stop.pack(side="left", padx=5)
         
-        # Optimized Export Button
         self.btn_export = tk.Button(self.btn_frame, text="🎬 EXPORT RELIABLE VIDEO", bg="#17a2b8", fg="white", 
                                    command=self.export_as_video, state="disabled", width=25, font=("Arial", 9, "bold"))
         self.btn_export.pack(side="left", padx=5)
@@ -166,7 +176,6 @@ class DisplayBridgeApp:
         win_w, win_h = self.display_frame.winfo_width()-30, self.display_frame.winfo_height()-30
         if win_w < 100 or win_h < 100: return 
         new_size = min(win_w, win_h)
-        # Use NEAREST for scaling to keep edges sharp
         self.tk_images = [ImageTk.PhotoImage(img.resize((new_size, new_size), Image.NEAREST)) for img in self.raw_qr_images]
         if not self.is_running and self.tk_images: self.show_current_qr()
 
@@ -180,29 +189,32 @@ class DisplayBridgeApp:
             if path: self.process_file(path)
 
     def process_file(self, path):
-        # Check file size before processing
         file_size = os.path.getsize(path)
         if file_size > MAX_FILE_SIZE_BYTES:
             max_kb = MAX_FILE_SIZE_BYTES // 1024
             actual_kb = file_size / 1024
-            messagebox.showerror(
-                "File Too Large",
-                f"The selected file exceeds the maximum allowed file size.\n\n"
-                f"Maximum size: {max_kb} KB\n"
-                f"File size:       {actual_kb:.1f} KB\n\n"
-                f"Please select a smaller file."
-            )
+            messagebox.showerror("File Too Large", f"Maximum size: {max_kb} KB\nFile size: {actual_kb:.1f} KB")
             return
 
-        self.clear_all(); self.filename = os.path.basename(path); self.path_var.set(f"Path: {path}")
+        self.clear_all()
+        self.filename = os.path.basename(path)
+        self.path_var.set(f"Path: {path}")
+        self.notify_var.set("⏳ Parallel processing... please wait.")
+        self.root.update_idletasks() # UI kurz aktualisieren
+
         try:
-            with open(path, "rb") as f: b64_str = base64.b64encode(f.read()).decode('utf-8')
-            parts = [b64_str[i:i+self.chunk_size] for i in range(0, len(b64_str), self.chunk_size)]
+            with open(path, "rb") as f: 
+                b64_str = base64.b64encode(f.read()).decode('utf-8')
             
-            # Create Protocol Sequence
+            parts = [b64_str[i:i+self.chunk_size] for i in range(0, len(b64_str), self.chunk_size)]
             raw_chunks = [f"START|{self.filename}|{len(parts)}"] + [f"DATA|{i}|{c}" for i, c in enumerate(parts)]
             
-            self.raw_qr_images = [self.generate_pil_qr(c) for c in raw_chunks]
+            # --- PARALLELE GENERIERUNG ---
+            # Wir nutzen ProcessPoolExecutor, um alle Kerne zu nutzen
+            with ProcessPoolExecutor() as executor:
+                self.raw_qr_images = list(executor.map(_worker_generate_qr, raw_chunks))
+            # -----------------------------
+            
             self.progress_bar["maximum"] = len(self.raw_qr_images)
             self.file_loaded = True
             
@@ -210,50 +222,40 @@ class DisplayBridgeApp:
             self.btn_stop.config(state="normal")
             self.btn_export.config(state="normal")
             
-            self.update_qr_scaling(); self.start_anim()
-        except Exception as e: messagebox.showerror("Error", f"Processing failed: {e}")
-
-    def generate_pil_qr(self, data):
-        qr = QRCode(version=None, error_correction=constants.ERROR_CORRECT_L, box_size=10, border=2)
-        qr.add_data(data); qr.make(fit=True)
-        return qr.make_image(fill_color="black", back_color="white").convert('RGB')
+            self.notify_var.set("✔ Encoding complete")
+            self.update_qr_scaling()
+            self.start_anim()
+        except Exception as e: 
+            messagebox.showerror("Error", f"Processing failed: {e}")
+            self.notify_var.set("")
 
     def export_as_video(self):
-        """Exports the sequence as an AVI video with duplicated first and last frames."""
         if not self.file_loaded or not self.raw_qr_images: return
         try:
             downloads_path = os.path.join(os.path.expanduser("~"), "Downloads")
             full_path = os.path.join(downloads_path, f"{self.filename}_bridge.avi")
             fps = self.fps_var.get()
             
-            # Ensure dimensions are even (required by most encoders)
             w, h = self.raw_qr_images[0].size
             w, h = (w // 2) * 2, (h // 2) * 2
             
-            # MJPG (Motion JPEG) is ideal for QR: No compression artifacts between frames.
             fourcc = cv2.VideoWriter_fourcc(*'MJPG')
             video = cv2.VideoWriter(full_path, fourcc, fps, (w, h))
-            
-            # Set maximum quality flag
             video.set(cv2.VIDEOWRITER_PROP_QUALITY, 100)
 
             if not video.isOpened():
-                raise Exception("Could not open VideoWriter. Check your system's OpenCV codecs.")
+                raise Exception("Could not open VideoWriter.")
 
             total_frames = len(self.raw_qr_images)
             for idx, pil_img in enumerate(self.raw_qr_images):
-                # Resize with NEAREST to keep pixel edges sharp
                 img_resized = pil_img.resize((w, h), Image.NEAREST)
                 cv_img = cv2.cvtColor(np.array(img_resized), cv2.COLOR_RGB2BGR)
-                
-                # Logic: Write frame once, but if it's the first or last, write it a second time.
                 video.write(cv_img)
-                
                 if idx == 0 or idx == total_frames - 1:
-                    video.write(cv_img) # Duplicate frame
+                    video.write(cv_img) 
 
             video.release()
-            self.notify_var.set(f"✔ VIDEO SAVED (START/END DUPLICATED)")
+            self.notify_var.set(f"✔ VIDEO SAVED")
             self.root.after(3000, lambda: self.notify_var.set(""))
         except Exception as e:
             messagebox.showerror("Export Error", f"Video creation failed: {e}")
@@ -274,6 +276,7 @@ class DisplayBridgeApp:
         self.current_idx = 0; self.qr_label.config(image=''); self.path_var.set("File: None selected")
         self.counter_var.set("0 / 0"); self.progress_bar["value"] = 0
         self.btn_start.config(state="disabled"); self.btn_stop.config(state="disabled"); self.btn_export.config(state="disabled")
+        self.notify_var.set("")
 
     def animate(self):
         if self.is_running and self.tk_images:
@@ -281,11 +284,9 @@ class DisplayBridgeApp:
             self.counter_var.set(f"{self.current_idx + 1} / {len(self.tk_images)}")
             self.progress_bar["value"] = self.current_idx + 1
             self.current_idx = (self.current_idx + 1) % len(self.tk_images)
-            # Dynamic delay based on UI speed setting
             self.root.after(int(1000 / self.fps_var.get()), self.animate)
 
 if __name__ == "__main__":
     try:
-        # Use TkinterDnD for drag and drop support
         root = TkinterDnD.Tk(); app = DisplayBridgeApp(root); root.mainloop()
     except Exception as e: print(f"Fatal Error: {e}")
