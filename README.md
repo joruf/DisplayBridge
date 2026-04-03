@@ -14,6 +14,22 @@
 - **Drag & Drop** – Easy file handling with `TkinterDnD` integration.
 - **Auto-Dependency Management** – Checks and installs required Python libraries on startup.
 
+---
+
+## Technical Protocol
+
+DisplayBridge uses a structured packet system to ensure data arrives correctly even if frames are captured out of order.
+
+
+
+### Packet Structure
+- **START Packet:** `START|filename|total_chunks|sha256_hash`
+  - Initializes the transfer and sets the security anchor for verification.
+- **DATA Packet:** `DATA|chunk_index|base64_payload`
+  - Carries the actual file content with sequence tracking for reconstruction.
+
+### Security & Integrity
+Before transmission, the **Sender** generates a SHA-256 fingerprint. The **Receiver** re-calculates this hash after reassembly. If the hashes do not match (due to corruption or manipulation), the file is discarded to prevent saving "junk" data.
 
 ---
 
