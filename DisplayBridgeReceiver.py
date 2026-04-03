@@ -11,15 +11,18 @@ TECHNICAL OPERATION:
 1.  ACQUISITION:
     - Live Mode: Utilizes OpenCV (cv2) to capture real-time camera frames.
     - File Mode: Scans every frame of a video or a static image using a frame-by-frame iteration logic.
-2.  DECODING:
-    - Uses the ZBar library (pyzbar) to identify and decode QR codes within each frame.
-    - Extracts structured data strings formatted as 'TYPE|METADATA|PAYLOAD'.
-3.  RECONSTRUCTION:
-    - Buffers incoming Base64-encoded chunks into a dictionary to handle out-of-order delivery or redundant captures.
-    - Once the total chunk count (defined in the 'START' packet) is reached, the application concatenates the segments and decodes the Base64 string back into the original binary file.
-4.  AUTO-SAVE:
+2.  RECONSTRUCTION & INTEGRITY:
+    - SHA-256 VERIFICATION: Extracts a mandatory SHA-256 hash from the 'START' packet. After reassembly, the application computes the hash of the received bytes to ensure the file is identical to the source.
+    - Buffering: Stores Base64-encoded chunks in a dictionary to handle out-of-order delivery, dropped frames, or redundant captures.
+    - Decoding: Once all chunks are present, it concatenates the segments and decodes the Base64 string back into the original binary file.
+3.  AUTO-SAVE:
     - Automatically writes the reconstructed file to the user's ~/Downloads directory using the original filename.
-5.  SECURITY ARCHITECTURE:
+
+PACKET STRUCTURE (PROTOCOL WRAPPING):
+    - START Packet: [START|filename|total_chunks|sha256_hash] Initializes metadata and sets the security anchor.
+    - DATA Packets: [DATA|chunk_index|base64_payload] Transmits actual content with sequence tracking for reassembly.
+      
+SECURITY ARCHITECTURE:
 	a. INPUT SANITIZATION: Uses Regex to strip potentially malicious characters from filenames, preventing shell injection and filesystem attacks.
 	b. PATH TRAVERSAL PROTECTION: Forces filenames into a flat structure using os.path.basename, ensuring files cannot be written outside the target directory.
 	c. RESOURCE QUOTAS: Implements MAX_CHUNKS and MAX_FILE_SIZE_MB to prevent Memory-Exhaustion (DoS) attacks via manipulated QR metadata.
@@ -41,6 +44,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog
 import numpy as np
 from datetime import datetime
+import hashlib # Integrity check (SHA-256)
 
 # --- PART 1: DEPENDENCIES ---
 def ensure_dependencies():
@@ -76,6 +80,7 @@ class ReceiverApp:
         self.root.title("DisplayBridge - Receiver")
         self.root.geometry("900x1000")
         self.root.configure(bg="#f5f5f5")
+        self.expected_hash = "" # For HASH Check
 
         # Security limits
         self.MAX_FILE_SIZE_MB = 200
@@ -255,30 +260,46 @@ class ReceiverApp:
         self.cam_label.configure(image=imgtk, text="")
 
     def process_qr_data(self, data):
+        """
+        Main decoding logic: Validates packets and reconstructs the file.
+        """
         try:
             parts = data.split('|')
             
             # 1. VALIDATION OF START PACKET
             if parts[0] == "START" and not self.is_collecting:
-                raw_filename = parts[1]
-                num_chunks = int(parts[2])
-
-                if num_chunks > self.MAX_CHUNKS or num_chunks <= 0:
-                    self.log_message("SECURITY ALERT: Invalid chunk count rejected.")
+                # Check for mandatory 4 fields (START, Name, Chunks, Hash)
+                if len(parts) < 4:
+                    self.log_message("SECURITY ALERT: Old/Insecure protocol rejected.")
+                    self.notify_var.set("❌ ERROR: INSECURE SOURCE")
                     return
 
+                raw_filename = parts[1]
+                num_chunks = int(parts[2])
+                self.expected_hash = parts[3]
+
+                # Resource Quota Check
+                if num_chunks > self.MAX_CHUNKS or num_chunks <= 0:
+                    self.log_message("SECURITY ALERT: Invalid chunk count.")
+                    return
+
+                # Path Traversal & Sanitization
                 clean_filename = os.path.basename(raw_filename)
                 clean_filename = re.sub(r'(?u)[^-\w.]', '', clean_filename)
                 
+                # Extension Whitelisting
                 ext = os.path.splitext(clean_filename)[1].lower()
                 if ext not in self.ALLOWED_EXTENSIONS:
                     self.log_message(f"SECURITY ALERT: Extension {ext} not allowed.")
                     return
 
+                # Hash Format Validation (64 char Hex)
+                if not re.match(r'^[a-fA-F0-9]{64}$', self.expected_hash):
+                    self.log_message("SECURITY ALERT: Malformed integrity hash.")
+                    return
+
                 self.filename = clean_filename
                 self.total_chunks = num_chunks
-                
-                # Progressbar korrekt initialisieren
                 self.progress_bar.config(maximum=self.total_chunks, value=0)
                 
                 self.is_collecting = True
@@ -294,6 +315,7 @@ class ReceiverApp:
                     return
 
                 if idx not in self.received_chunks:
+                    # DoS Protection: Memory Limit Check
                     if (len(self.received_chunks) * 3000) > (self.MAX_FILE_SIZE_MB * 1024 * 1024):
                         self.log_message("SECURITY ALERT: File size limit exceeded.")
                         self.reset_ui_state()
@@ -302,22 +324,37 @@ class ReceiverApp:
                     self.received_chunks[idx] = payload
                     count = len(self.received_chunks)
                     
-                    # Fortschritt aktualisieren
                     self.progress_bar["value"] = count
                     self.progress_var.set(f"{count} / {self.total_chunks}")
-                    self.root.update_idletasks() # Erzwingt das visuelle Update der UI
+                    self.root.update_idletasks()
                     
                     if count == self.total_chunks:
                         self.save_and_finish()
         except Exception:
-            self.log_message(f"Security Filter: Invalid packet discarded.")
+            self.log_message("Security Filter: Invalid packet discarded.")
 
     def save_and_finish(self):
+        """
+        Reconstructs the file, performs mandatory integrity check, and saves to disk.
+        """
         try:
+            # Reassemble Base64 string and decode to binary
             full_b64 = "".join([self.received_chunks[i] for i in range(self.total_chunks)])
             file_bytes = base64.b64decode(full_b64)
+            
+            # MANDATORY Integrity Check (SHA-256)
+            actual_hash = hashlib.sha256(file_bytes).hexdigest()
+            
+            if actual_hash != self.expected_hash:
+                self.log_message("INTEGRITY FAILURE: Hash mismatch! Data is corrupt.")
+                self.notify_var.set("❌ ERROR: HASH MISMATCH")
+                self.reset_ui_state()
+                return
+
+            # Save only if hash is verified
             path = os.path.join(os.path.expanduser("~"), "Downloads", self.filename)
-            with open(path, "wb") as f: f.write(file_bytes)
+            with open(path, "wb") as f: 
+                f.write(file_bytes)
             
             self.last_success = True
             self.notify_var.set("✔ FILE RECONSTRUCTED & SAVED")

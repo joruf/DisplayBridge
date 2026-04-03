@@ -9,35 +9,27 @@ QR codes. It acts as the transmission source, allowing data to be
 
 TECHNICAL OPERATION:
 1.  ENCODING & FRAGMENTATION:
-    - Reads the input file as raw binary and encodes it into a single
-      Base64 string to ensure 7-bit ASCII compatibility for QR generation.
-    - Slices the string into fixed-size segments (chunks) to fit within
-      QR code density limits.
-2.  PROTOCOL WRAPPING:
-    - START Packet: Generates a header frame containing the original
-      filename and the total number of expected chunks.
-    - DATA Packets: Wraps each payload chunk with a sequence index
-      ('DATA|index|payload') to allow for unordered reconstruction.
-3.  RELIABLE VIDEO EXPORT:
-    - Frame Redundancy: Duplicates the first (Header) and last (Footer)
-      frames in the video export to ensure the receiver catches the
-      critical start/end signals.
-    - MJPG Implementation: Uses the Motion JPEG codec at 100% quality
-      to provide lossless intra-frame compression, ensuring QR edges 
-      remain perfectly sharp for scanning.
-4.  VISUAL OPTIMIZATION:
-    - Employs 'NEAREST' neighbor interpolation for scaling, preventing 
-      anti-aliasing "blur" that typically breaks QR recognition at 
-      high resolutions.
-    - Dynamic FPS control to match the processing capabilities of the 
-      receiving device.
+    - Reads the input file as raw binary and encodes it into a single Base64 string to ensure 7-bit ASCII compatibility for QR generation.
+    - Slices the string into fixed-size segments (chunks) to fit within QR code density limits.
+2.  RELIABLE VIDEO EXPORT:
+    - Frame Redundancy: Duplicates the first (Header) and last (Footer) frames in the video export to ensure the receiver catches the critical start/end signals.
+    - MJPG Implementation: Uses the Motion JPEG codec at 100% quality to provide lossless intra-frame compression, ensuring QR edges remain perfectly sharp for scanning.
+3.  VISUAL OPTIMIZATION:
+    - Employs 'NEAREST' neighbor interpolation for scaling, preventing  anti-aliasing "blur" that typically breaks QR recognition at high resolutions.
+    - Dynamic FPS control to match the processing capabilities of the receiving device.
+
+PACKET STRUCTURE (PROTOCOL WRAPPING):
+    - START Packet: [START|filename|total_chunks|sha256_hash] Initializes metadata and sets the security anchor.
+    - DATA Packets: [DATA|chunk_index|base64_payload] Transmits actual content with sequence tracking for reassembly.
+
+SECURITY & SAFETY:
+- INPUT SANITIZATION: Automatically strips malicious characters from filenames to prevent path traversal or injection attacks on the receiver's filesystem.
+- DATA VERIFICATION: Mandatory hashing prevents the reconstruction of partially captured or corrupted files, ensuring "all-or-nothing" data reliability.
 
 FUNCTIONAL FEATURES:
 - DRAG & DROP: Built with TkinterDnD for seamless file importing.
-- DUAL OUTPUT: Offers both a live on-screen loop animation and an
-  optimized .avi video export.
-- RELIABILITY FOCUS: Automated redundancy and sharp-edge rendering
-  specifically tuned for 2026-era high-res displays.
+- DUAL OUTPUT: Offers both a live on-screen loop animation and an optimized .avi video export.
+- RELIABILITY FOCUS: Automated redundancy and sharp-edge rendering specifically tuned for 2026-era high-res displays.
 """
 
 import subprocess
@@ -49,6 +41,7 @@ from tkinter import filedialog, messagebox, ttk
 import numpy as np
 # NEU: Für die parallele Verarbeitung
 from concurrent.futures import ProcessPoolExecutor
+import hashlib # Integrity check (SHA-256)
 
 # Maximum allowed file size in bytes (default: 500 KB)
 MAX_FILE_SIZE_BYTES = 500 * 1024
@@ -199,18 +192,22 @@ class DisplayBridgeApp:
         self.clear_all()
         self.filename = os.path.basename(path)
         self.path_var.set(f"Path: {path}")
-        self.notify_var.set("⏳ Parallel processing... please wait.")
-        self.root.update_idletasks() # UI kurz aktualisieren
+        self.notify_var.set("Parallel processing... please wait.")
+        self.root.update_idletasks()
 
         try:
             with open(path, "rb") as f: 
-                b64_str = base64.b64encode(f.read()).decode('utf-8')
+                file_content = f.read()
+                # NEU: SHA-256 Hash der Originaldatei berechnen
+                file_hash = hashlib.sha256(file_content).hexdigest()
+                b64_str = base64.b64encode(file_content).decode('utf-8')
             
             parts = [b64_str[i:i+self.chunk_size] for i in range(0, len(b64_str), self.chunk_size)]
-            raw_chunks = [f"START|{self.filename}|{len(parts)}"] + [f"DATA|{i}|{c}" for i, c in enumerate(parts)]
+            
+            # NEU: START-Paket enthält jetzt zusätzlich den Hash am Ende
+            raw_chunks = [f"START|{self.filename}|{len(parts)}|{file_hash}"] + [f"DATA|{i}|{c}" for i, c in enumerate(parts)]
             
             # --- PARALLELE GENERIERUNG ---
-            # Wir nutzen ProcessPoolExecutor, um alle Kerne zu nutzen
             with ProcessPoolExecutor() as executor:
                 self.raw_qr_images = list(executor.map(_worker_generate_qr, raw_chunks))
             # -----------------------------
