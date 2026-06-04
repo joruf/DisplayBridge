@@ -59,8 +59,6 @@ The **Receiver** captures the stream via webcam or file import. The real-time lo
 
 ---
 
----
-
 ## Platform Support
 
 ### Linux
