@@ -6,13 +6,25 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; text-align: center; padding: 20px; color: #333; }
-        .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); position: relative; }
         
+        /* Caching Overlay */
+        #overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255, 255, 255, 0.85);
+            display: none; flex-direction: column; justify-content: center; align-items: center;
+            z-index: 100; border-radius: 15px; backdrop-filter: blur(2px);
+        }
+        .loader-text { font-size: 1.5em; font-weight: bold; color: #007bff; margin-bottom: 10px; }
+        .loader-sub { font-family: monospace; color: #555; }
+
         #qrcode { 
             margin: 20px auto; padding: 20px; background: white; 
             display: inline-block; border: 1px solid #ddd; border-radius: 10px;
             min-height: 300px; min-width: 300px;
         }
+        #qrcode canvas { display: block; }
+        #qrcode img { display: none !important; }
 
         .controls { 
             margin: 20px 0; display: flex; flex-direction: column; 
@@ -22,15 +34,17 @@
 
         .setting-group { width: 100%; display: flex; flex-direction: column; gap: 8px; text-align: left; }
         
-        .radio-group { display: flex; gap: 10px; flex-wrap: wrap; justify-content: space-between; }
+        .radio-group { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-start; width: 100%; }
         .radio-option {
-            flex: 1; min-width: 80px; position: relative;
+            flex: 1; min-width: 65px; position: relative;
             background: #fff; border: 1px solid #ddd; border-radius: 6px;
-            padding: 8px; text-align: center; cursor: pointer; transition: all 0.2s;
+            padding: 10px 5px; text-align: center; cursor: pointer; transition: all 0.2s;
+            font-size: 0.9em; font-weight: 600;
         }
         .radio-option:hover { background: #e9ecef; }
         .radio-option input { position: absolute; opacity: 0; cursor: pointer; }
         .radio-option.active { background: #007bff; color: white; border-color: #0056b3; }
+        .radio-option.disabled { opacity: 0.5; cursor: not-allowed; }
 
         button { 
             padding: 12px 25px; font-weight: bold; cursor: pointer; border-radius: 8px; 
@@ -42,27 +56,28 @@
         button#stopBtn { background: #dc3545; }
         button#stopBtn:hover { background: #c82333; }
         
-        /* Smaller Test File Button */
         .file-row { display: flex; gap: 10px; align-items: center; width: 100%; }
-        button#testFileBtn { 
-            background: #17a2b8; margin: 0; width: auto; 
-            padding: 8px 15px; font-size: 0.85em; white-space: nowrap; 
-        }
-        button#testFileBtn:hover { background: #138496; }
+        button#testFileBtn { background: #17a2b8; margin: 0; width: auto; padding: 8px 15px; font-size: 0.85em; white-space: nowrap; }
 
         #status { font-weight: bold; color: #007bff; margin: 10px; font-size: 1.1em; }
         #packetInfo { font-family: 'Courier New', monospace; font-size: 14px; color: #555; background: #eee; padding: 5px; border-radius: 4px; }
         
         input[type="file"] { border: 1px dashed #bbb; padding: 10px; flex-grow: 1; border-radius: 8px; cursor: pointer; background: white; font-size: 0.85em; }
-        select { padding: 8px; border-radius: 4px; border: 1px solid #ddd; background: white; }
+        select { padding: 10px; border-radius: 8px; border: 1px solid #ddd; background: white; width: 100%; font-size: 1em; cursor: pointer; }
 
         .footer { margin-top: 25px; font-size: 0.85em; color: #6c757d; }
         a { color: #007bff; text-decoration: none; font-weight: bold; }
+        #hidden-qrs { display: none; }
     </style>
 </head>
 <body>
 
 <div class="container">
+    <div id="overlay">
+        <div class="loader-text">Caching...</div>
+        <div id="overlayCount" class="loader-sub">0 / 0</div>
+    </div>
+
     <h2>DisplayBridge Sender</h2>
     <p>Convert files into a timed QR-code sequence.</p>
 
@@ -77,22 +92,12 @@
 
         <div class="setting-group">
             <label><strong>2. Chunk Size:</strong></label>
-            <select id="chunkSize">
-                <option value="200" selected>200 (Safe)</option>
-                <option value="450">450 (Standard)</option>
-                <option value="800">800 (High Density)</option>
-            </select>
+            <select id="chunkSize"></select>
         </div>
 
         <div class="setting-group">
-            <label><strong>3. Speed Presets (FPS):</strong></label>
-            <div class="radio-group" id="speedPresets">
-                <label class="radio-option"><input type="radio" name="fps" value="2"> 2 FPS</label>
-                <label class="radio-option"><input type="radio" name="fps" value="4"> 4 FPS</label>
-                <label class="radio-option"><input type="radio" name="fps" value="8" checked> 8 FPS</label>
-                <label class="radio-option active"><input type="radio" name="fps" value="15"> 15 FPS</label>
-                <label class="radio-option"><input type="radio" name="fps" value="30"> 30 FPS</label>
-            </div>
+            <label><strong>3. Speed (FPS):</strong></label>
+            <div class="radio-group" id="speedPresets"></div>
         </div>
 
         <div style="display: flex; gap: 10px; width: 100%;">
@@ -102,8 +107,10 @@
     </div>
 
     <div id="status">Status: Waiting for file...</div>
-    <div id="qrcode"></div>
+    <div id="qrcode"><canvas id="mainCanvas" width="300" height="300"></canvas></div>
     <div id="packetInfo">Please select a file to begin.</div>
+
+    <div id="hidden-qrs"></div>
 
     <div class="footer">
         Generator: <a href="https://github.com/joruf/DisplayBridge" target="_blank">github.com/joruf/DisplayBridge</a>
@@ -117,24 +124,41 @@
     const stopBtn = document.getElementById('stopBtn');
     const statusDiv = document.getElementById('status');
     const packetInfo = document.getElementById('packetInfo');
-    const qrcodeDiv = document.getElementById('qrcode');
+    const mainCanvas = document.getElementById('mainCanvas');
+    const mainCtx = mainCanvas.getContext('2d', { alpha: false });
     const chunkSizeSelect = document.getElementById('chunkSize');
-    const speedPresets = document.querySelectorAll('input[name="fps"]');
+    const speedPresetsContainer = document.getElementById('speedPresets');
+    const hiddenContainer = document.getElementById('hidden-qrs');
+    const overlay = document.getElementById('overlay');
+    const overlayCount = document.getElementById('overlayCount');
 
-    let streamInterval = null;
-    let currentPacketIdx = 0;
-    let allPackets = [];
-    let currentFile = null;
-    
-    let qr = new QRCode(qrcodeDiv, { width: 300, height: 300, correctLevel: QRCode.CorrectLevel.L });
+    const fpsValues = [5, 10, 15, 20, 30];
+    const chunkSizeValues = [100, 200, 450, 800, 1200];
+    const defaultFPS = 15;
+    const defaultChunk = 200;
 
-    speedPresets.forEach(radio => {
-        radio.addEventListener('change', (e) => {
+    fpsValues.forEach(fps => {
+        const label = document.createElement('label');
+        label.className = `radio-option ${fps === defaultFPS ? 'active' : ''}`;
+        label.innerHTML = `<input type="radio" name="fps" value="${fps}" ${fps === defaultFPS ? 'checked' : ''}> ${fps}`;
+        label.querySelector('input').addEventListener('change', (e) => {
             document.querySelectorAll('.radio-option').forEach(el => el.classList.remove('active'));
-            e.target.parentElement.classList.add('active');
-            if (streamInterval) startLoop();
+            label.classList.add('active');
         });
+        speedPresetsContainer.appendChild(label);
     });
+
+    chunkSizeValues.forEach(size => {
+        const opt = new Option(`${size} Bytes`, size);
+        if (size === defaultChunk) opt.selected = true;
+        chunkSizeSelect.add(opt);
+    });
+
+    let isStreaming = false;
+    let currentPacketIdx = 0;
+    let qrCanvases = [];
+    let currentFile = null;
+    let lastFrameTime = 0;
 
     chunkSizeSelect.addEventListener('change', () => {
         if (currentFile) prepareFile(currentFile);
@@ -148,8 +172,12 @@
     async function prepareFile(file, autoStart = false) {
         if (!file) return;
         currentFile = file;
-
-        statusDiv.innerText = "Status: Preparing...";
+        qrCanvases = [];
+        hiddenContainer.innerHTML = "";
+        
+        // Overlay einblenden
+        overlay.style.display = 'flex';
+        statusDiv.innerText = "Status: Caching Chunks...";
         
         const arrayBuffer = await file.arrayBuffer();
         const hash = await computeSHA256(arrayBuffer);
@@ -159,30 +187,64 @@
         const size = parseInt(chunkSizeSelect.value);
         const totalChunks = Math.ceil(base64String.length / size);
         
-        allPackets = [`START|${file.name}|${totalChunks}|${hash}`];
+        const packets = [`START|${file.name}|${totalChunks}|${hash}`];
         for (let i = 0; i < base64String.length; i += size) {
-            allPackets.push(`DATA|${Math.floor(i/size)}|${base64String.substring(i, i + size)}`);
+            packets.push(`DATA|${Math.floor(i/size)}|${base64String.substring(i, i + size)}`);
+        }
+
+        for (let i = 0; i < packets.length; i++) {
+            const tempDiv = document.createElement('div');
+            new QRCode(tempDiv, { text: packets[i], width: 300, height: 300, correctLevel: QRCode.CorrectLevel.L });
+            await new Promise(r => setTimeout(r, 5));
+            qrCanvases.push(tempDiv.querySelector('canvas'));
+            const progressStr = `${i + 1} / ${packets.length}`;
+            packetInfo.innerText = `Caching: ${progressStr}`;
+            overlayCount.innerText = progressStr;
         }
 
         currentPacketIdx = 0;
-        qr.makeCode(allPackets[0]);
-        statusDiv.innerText = "Status: Ready";
-        packetInfo.innerText = `File: ${file.name} prepared.`;
+        renderCurrentQR();
+        
+        // Overlay ausblenden
+        overlay.style.display = 'none';
+        statusDiv.innerText = "Status: Ready (Cached)";
+        packetInfo.innerText = `File: ${file.name} ready.`;
+        if (autoStart) handleStart();
+    }
 
-        if (autoStart) {
-            handleStart();
+    function renderCurrentQR() {
+        if (qrCanvases.length > 0) {
+            mainCtx.clearRect(0, 0, 300, 300);
+            mainCtx.drawImage(qrCanvases[currentPacketIdx], 0, 0);
         }
     }
 
+    function streamLoop(timestamp) {
+        if (!isStreaming) return;
+        const selectedFPS = parseInt(document.querySelector('input[name="fps"]:checked').value);
+        const frameInterval = 1000 / selectedFPS;
+
+        if (timestamp - lastFrameTime >= frameInterval) {
+            lastFrameTime = timestamp;
+            renderCurrentQR();
+            packetInfo.innerText = currentPacketIdx === 0 
+                ? "Current: [START] Packet" 
+                : `Current: [Chunks] ${currentPacketIdx} / ${qrCanvases.length - 1}`;
+            currentPacketIdx = (currentPacketIdx + 1) % qrCanvases.length;
+        }
+        requestAnimationFrame(streamLoop);
+    }
+
     function handleStart() {
-        if (allPackets.length === 0) return;
+        if (qrCanvases.length === 0) return;
+        isStreaming = true;
         startBtn.disabled = true;
         stopBtn.disabled = false;
         fileInput.disabled = true;
         testFileBtn.disabled = true;
         chunkSizeSelect.disabled = true;
         statusDiv.innerText = "Status: STREAMING...";
-        startLoop();
+        requestAnimationFrame(streamLoop);
     }
 
     testFileBtn.addEventListener('click', async () => {
@@ -190,12 +252,8 @@
             statusDiv.innerText = "Status: Fetching...";
             const response = await fetch('test_10kb.txt');
             if (!response.ok) throw new Error("test_10kb.txt not found.");
-            
             const blob = await response.blob();
             const file = new File([blob], "test_10kb.txt", { type: "text/plain" });
-            
-            fileInput.value = ""; 
-            // Pass true to autoStart
             prepareFile(file, true);
         } catch (err) {
             alert(err.message);
@@ -204,27 +262,9 @@
     });
 
     fileInput.addEventListener('change', (e) => prepareFile(e.target.files[0]));
-
-    function startLoop() {
-        if (streamInterval) clearInterval(streamInterval);
-        const selectedFPS = document.querySelector('input[name="fps"]:checked').value;
-        const msPerFrame = 1000 / parseInt(selectedFPS);
-        
-        streamInterval = setInterval(() => {
-            if (allPackets.length === 0) return;
-            qr.makeCode(allPackets[currentPacketIdx]);
-            packetInfo.innerText = currentPacketIdx === 0 
-                ? "Current: [START] Packet" 
-                : `Current: [Chunks] ${currentPacketIdx} / ${allPackets.length - 1}`;
-            currentPacketIdx = (currentPacketIdx + 1) % allPackets.length;
-        }, msPerFrame);
-    }
-
     startBtn.addEventListener('click', handleStart);
-
     stopBtn.addEventListener('click', () => {
-        clearInterval(streamInterval);
-        streamInterval = null;
+        isStreaming = false;
         startBtn.disabled = false;
         stopBtn.disabled = true;
         fileInput.disabled = false;
@@ -232,7 +272,7 @@
         chunkSizeSelect.disabled = false;
         statusDiv.innerText = "Status: Stopped";
         currentPacketIdx = 0;
-        if(allPackets.length > 0) qr.makeCode(allPackets[0]);
+        renderCurrentQR();
     });
 </script>
 </body>
