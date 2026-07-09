@@ -136,6 +136,7 @@
     const chunkSizeValues = [100, 200, 450, 800, 1200];
     const defaultFPS = 15;
     const defaultChunk = 200;
+    const MAX_FILE_SIZE_BYTES = 500 * 1024;
 
     fpsValues.forEach(fps => {
         const label = document.createElement('label');
@@ -169,12 +170,25 @@
         return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
     }
 
+    function encodeFilename(filename) {
+        return btoa(encodeURIComponent(filename).replace(/%([0-9A-F]{2})/gi, (_, hex) =>
+            String.fromCharCode(parseInt(hex, 16))
+        ));
+    }
+
     async function prepareFile(file, autoStart = false) {
         if (!file) return;
+        if (file.size > MAX_FILE_SIZE_BYTES) {
+            const maxKb = MAX_FILE_SIZE_BYTES / 1024;
+            alert(`File too large. Maximum size: ${maxKb} KB\nFile size: ${(file.size / 1024).toFixed(1)} KB`);
+            statusDiv.innerText = "Status: File too large.";
+            return;
+        }
         currentFile = file;
         qrCanvases = [];
         hiddenContainer.innerHTML = "";
         
+        try {
         // Overlay einblenden
         overlay.style.display = 'flex';
         statusDiv.innerText = "Status: Caching Chunks...";
@@ -187,16 +201,19 @@
         const size = parseInt(chunkSizeSelect.value);
         const totalChunks = Math.ceil(base64String.length / size);
         
-        const packets = [`START|${file.name}|${totalChunks}|${hash}`];
+        const packets = [`START|${encodeFilename(file.name)}|${totalChunks}|${hash}`];
         for (let i = 0; i < base64String.length; i += size) {
             packets.push(`DATA|${Math.floor(i/size)}|${base64String.substring(i, i + size)}`);
         }
 
         for (let i = 0; i < packets.length; i++) {
             const tempDiv = document.createElement('div');
-            new QRCode(tempDiv, { text: packets[i], width: 300, height: 300, correctLevel: QRCode.CorrectLevel.L });
+            new QRCode(tempDiv, { text: packets[i], width: 300, height: 300, correctLevel: QRCode.CorrectLevel.M });
             await new Promise(r => setTimeout(r, 5));
             qrCanvases.push(tempDiv.querySelector('canvas'));
+            if (!qrCanvases[qrCanvases.length - 1]) {
+                throw new Error(`QR generation failed for packet ${i + 1}. Try a smaller chunk size.`);
+            }
             const progressStr = `${i + 1} / ${packets.length}`;
             packetInfo.innerText = `Caching: ${progressStr}`;
             overlayCount.innerText = progressStr;
@@ -210,6 +227,12 @@
         statusDiv.innerText = "Status: Ready (Cached)";
         packetInfo.innerText = `File: ${file.name} ready.`;
         if (autoStart) handleStart();
+        } catch (err) {
+            overlay.style.display = 'none';
+            alert(err.message);
+            statusDiv.innerText = "Status: Error.";
+            qrCanvases = [];
+        }
     }
 
     function renderCurrentQR() {

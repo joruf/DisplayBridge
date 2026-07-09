@@ -29,7 +29,6 @@
             font-weight: bold;
         }
 
-        #log { height: 100px; overflow-y: scroll; background: #212529; color: #20c997; text-align: left; padding: 10px; margin-top: 20px; font-family: monospace; font-size: 11px; border-radius: 5px; }
         .status { font-weight: bold; color: #dc3545; font-size: 1.2em; margin: 15px; }
         progress { width: 100%; height: 20px; }
         
@@ -54,7 +53,6 @@
         Speed: <span id="speed">0 KB/s</span>
     </div>
     <div id="chunk-grid"></div>
-    <div id="log"></div>
 </div>
 
 <script>
@@ -67,16 +65,21 @@
     const timerDisp = document.getElementById('timer');
     const speedDisp = document.getElementById('speed');
 
+    const MAX_CHUNKS = 10000;
+    const MAX_FILE_SIZE_MB = 200;
+    const ALLOWED_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.pdf', '.txt', '.zip', '.webp']);
+
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d", { alpha: false });
 
     let state = {
         isCollecting: false,
-        isFinished: false, // Neu: Verhindert Reset während des Laufs
+        isFinished: false,
         totalChunks: 0,
         filename: "file",
         chunks: {},
         preStartBuffer: {},
+        preStartLogged: false,
         lastProcessedData: "",
         startTime: null,
         timerInterval: null,
@@ -85,12 +88,39 @@
         totalBytesReceived: 0
     };
 
+    function decodeFilename(encodedName) {
+        try {
+            const decoded = decodeURIComponent(Array.from(atob(encodedName), c =>
+                '%' + c.charCodeAt(0).toString(16).padStart(2, '0')
+            ).join(''));
+            if (decoded && !/[\x00-\x08\x0e-\x1f]/.test(decoded)) {
+                return decoded;
+            }
+        } catch (e) {
+            // fall through to legacy plain filename
+        }
+        return encodedName;
+    }
+
+    function getExtension(filename) {
+        const dot = filename.lastIndexOf('.');
+        return dot >= 0 ? filename.slice(dot).toLowerCase() : '';
+    }
+
+    function base64ToBytes(b64) {
+        const binary = atob(b64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        return bytes;
+    }
+
     function resetReceiver() {
         if (state.timerInterval) clearInterval(state.timerInterval);
         state.isCollecting = false;
         state.isFinished = false;
         state.chunks = {};
         state.preStartBuffer = {};
+        state.preStartLogged = false;
         state.lastProcessedData = "";
         state.startTime = null;
         state.activeChunkIdx = -1;
@@ -125,8 +155,9 @@
             const code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: "dontInvert" });
 
             if (code && code.data !== state.lastProcessedData) {
-                processData(code.data);
-                state.lastProcessedData = code.data;
+                if (processData(code.data)) {
+                    state.lastProcessedData = code.data;
+                }
             }
         }
         
@@ -141,13 +172,23 @@
         const count = Object.keys(state.chunks).length;
         progress.value = count;
         chunkCountDisp.innerText = `${count} / ${state.totalChunks}`;
+
+        const missing = [];
+        for (let i = 0; i < state.totalChunks; i++) {
+            if (!state.chunks[i]) missing.push(i);
+        }
+        if (state.isCollecting && !state.isFinished && missing.length > 0) {
+            const display = missing.slice(0, 15);
+            const suffix = missing.length > 15 ? ` (+${missing.length - 15} more)` : "";
+            statusDiv.innerText = `Missing chunks: ${display.join(", ")}${suffix}`;
+        }
         
         document.querySelectorAll('.chunk.active').forEach(el => el.classList.remove('active'));
         if (state.activeChunkIdx >= 0) {
             const el = document.getElementById(`chunk-${state.activeChunkIdx}`);
             if (el) {
                 el.classList.add('active');
-                if (!el.classList.contains('received')) {
+                if (!el.classList.contains('received') && state.chunks[state.activeChunkIdx]) {
                     el.classList.add('received');
                     el.innerText = "✓";
                 }
@@ -155,26 +196,56 @@
         }
     }
 
+    function validateStartPacket(parts) {
+        if (parts.length < 4) {
+            statusDiv.innerText = "Rejected: invalid START packet.";
+            return false;
+        }
+
+        const totalChunks = parseInt(parts[2], 10);
+        const expectedHash = parts[3];
+
+        if (!Number.isInteger(totalChunks) || totalChunks <= 0 || totalChunks > MAX_CHUNKS) {
+            statusDiv.innerText = "Rejected: invalid chunk count.";
+            return false;
+        }
+
+        const filename = decodeFilename(parts[1]).split(/[/\\]/).pop().replace(/\x00/g, '');
+        const ext = getExtension(filename);
+        if (!filename || !ALLOWED_EXTENSIONS.has(ext)) {
+            statusDiv.innerText = `Rejected: extension ${ext || '(none)'} not allowed.`;
+            return false;
+        }
+
+        if (!/^[a-fA-F0-9]{64}$/.test(expectedHash)) {
+            statusDiv.innerText = "Rejected: malformed integrity hash.";
+            return false;
+        }
+
+        return true;
+    }
+
     function processData(raw) {
         const now = Date.now();
         const parts = raw.split('|');
         
         if (parts[0] === "START") {
-            // Ein Reset erfolgt NUR, wenn wir noch nicht sammeln ODER wenn wir bereits fertig waren
             if (!state.isCollecting || state.isFinished) {
+                if (!validateStartPacket(parts)) return false;
+
                 state.isFinished = false;
-                state.filename = parts[1].replace(/[^-_\w.]/g, '');
-                state.totalChunks = parseInt(parts[2]);
+                state.filename = decodeFilename(parts[1]).split(/[/\\]/).pop().replace(/\x00/g, '');
+                state.totalChunks = parseInt(parts[2], 10);
                 state.expectedHash = parts[3];
                 state.isCollecting = true;
                 state.chunks = { ...state.preStartBuffer };
                 state.preStartBuffer = {};
+                state.preStartLogged = false;
                 buildGrid(state.totalChunks);
                 progress.max = state.totalChunks;
                 state.needsUIUpdate = true;
                 currentIdDisp.innerText = "START";
                 
-                // Timer Start
                 if (state.timerInterval) clearInterval(state.timerInterval);
                 state.startTime = now;
                 state.timerInterval = setInterval(() => {
@@ -185,33 +256,56 @@
                         speedDisp.innerText = kbps.toFixed(1) + " KB/s";
                     }
                 }, 200);
+
+                if (Object.keys(state.chunks).length === state.totalChunks) {
+                    finishDownload();
+                }
+                return true;
             }
+            return false;
         } 
         else if (parts[0] === "DATA") {
-            const idx = parseInt(parts[1]);
-            const payload = parts[2];
-            state.activeChunkIdx = idx;
-            currentIdDisp.innerText = idx;
+            const idx = parseInt(parts[1], 10);
+            const payload = parts.slice(2).join('|');
 
             if (state.isCollecting && !state.isFinished) {
+                state.activeChunkIdx = idx;
+                currentIdDisp.innerText = idx;
+
                 if (idx >= 0 && idx < state.totalChunks && !state.chunks[idx]) {
+                    const currentSize = Object.values(state.chunks).reduce((sum, c) => sum + c.length, 0);
+                    if ((currentSize + payload.length) > MAX_FILE_SIZE_MB * 1024 * 1024) {
+                        statusDiv.innerText = "Rejected: file size limit exceeded.";
+                        resetReceiver();
+                        return false;
+                    }
+
                     state.chunks[idx] = payload;
                     state.totalBytesReceived += payload.length * 0.75;
                     state.needsUIUpdate = true;
                     if (Object.keys(state.chunks).length === state.totalChunks) finishDownload();
+                    return true;
                 }
+                return false;
             } else if (!state.isFinished) {
-                // Buffer füllen falls START noch nicht gesehen wurde
                 if (!state.preStartBuffer[idx]) {
                     state.preStartBuffer[idx] = payload;
                     state.totalBytesReceived += payload.length * 0.75;
+                    if (!state.preStartLogged) {
+                        state.preStartLogged = true;
+                        statusDiv.innerText = "Buffering DATA packets (waiting for START)...";
+                    }
+                    return true;
                 }
+                return false;
             }
+            return false;
         }
+        return false;
     }
 
     async function finishDownload() {
-        state.isFinished = true; // Markiert den Durchlauf als beendet
+        state.isFinished = true;
         if (state.timerInterval) clearInterval(state.timerInterval);
         const finalElapsed = (Date.now() - state.startTime) / 1000;
         
@@ -220,7 +314,7 @@
         try {
             let b64 = "";
             for (let i = 0; i < state.totalChunks; i++) b64 += state.chunks[i];
-            const bytes = new Uint8Array(atob(b64).split("").map(c => c.charCodeAt(0)));
+            const bytes = base64ToBytes(b64);
             const hashBuffer = await crypto.subtle.digest('SHA-256', bytes);
             const hash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
             
@@ -230,14 +324,20 @@
                 a.href = url;
                 a.download = state.filename;
                 a.click();
+                URL.revokeObjectURL(url);
                 
                 const finalKbps = (bytes.length / 1024) / finalElapsed;
                 statusDiv.innerText = `Success! (${finalKbps.toFixed(1)} KB/s avg)`;
+                state.isCollecting = false;
+                state.chunks = {};
+                state.preStartBuffer = {};
             } else {
-                statusDiv.innerText = "Hash mismatch / Corrupt!";
+                statusDiv.innerText = "Hash mismatch / Corrupt! Please reset and retry.";
+                state.isCollecting = false;
             }
         } catch (e) {
             statusDiv.innerText = "Error during reconstruction.";
+            state.isCollecting = false;
         }
     }
 

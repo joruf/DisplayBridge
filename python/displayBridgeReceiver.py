@@ -85,7 +85,7 @@ class ReceiverApp:
         # Security limits
         self.MAX_FILE_SIZE_MB = 200
         self.MAX_CHUNKS = 10000
-        self.ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.pdf', '.txt', '.zip'} 
+        self.ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.pdf', '.txt', '.zip', '.webp'}
 
         # Logic State
         self.valid_video_exts = {'.avi', '.mp4', '.mkv', '.mov', '.wmv'}
@@ -93,6 +93,8 @@ class ReceiverApp:
         self.filename = ""
         self.total_chunks = 0
         self.received_chunks = {}
+        self.pre_start_buffer = {}
+        self.pre_start_logged = False
         self.is_collecting = False
         self.is_cam_on = False
         self.cap = None
@@ -191,12 +193,20 @@ class ReceiverApp:
         self.reset_ui_state()
         self.log_message(f"Scanning Image: {os.path.basename(path)}")
         frame = cv2.imread(path)
+        qr_found = False
         if frame is not None:
             for obj in decode(frame):
-                try: self.process_qr_data(obj.data.decode('utf-8'))
-                except: continue
+                try:
+                    self.process_qr_data(obj.data.decode('utf-8'))
+                    qr_found = True
+                except Exception as e:
+                    self.log_message(f"Decode error: {e}")
             self.show_frame(frame)
-        if not self.last_success: self.log_message("No QR data found.")
+        if not self.last_success:
+            if qr_found:
+                self.log_message("QR detected but transfer incomplete or rejected.")
+            else:
+                self.log_message("No QR data found.")
 
     def process_video(self, path):
         self.reset_ui_state()
@@ -211,12 +221,21 @@ class ReceiverApp:
             if not ret or self.last_success: break
             frame_idx += 1
             for obj in decode(frame):
-                try: self.process_qr_data(obj.data.decode('utf-8'))
-                except: continue
+                try:
+                    self.process_qr_data(obj.data.decode('utf-8'))
+                except Exception as e:
+                    self.log_message(f"Decode error: {e}")
             if frame_idx % 20 == 0:
                 self.progress_bar["value"] = (frame_idx / total_frames) * 100
                 self.root.update()
         cap.release()
+
+        if self.is_collecting and not self.last_success:
+            missing = [i for i in range(self.total_chunks) if i not in self.received_chunks]
+            display = missing[:15]
+            suffix = f" (+{len(missing) - 15} more)" if len(missing) > 15 else ""
+            self.log_message(f"Video scan incomplete. Missing chunks: {', '.join(map(str, display))}{suffix}")
+            self.update_missing_chunks_display()
 
     def start_camera(self):
         self.cap = cv2.VideoCapture(0)
@@ -245,7 +264,8 @@ class ReceiverApp:
                     self.process_qr_data(obj.data.decode('utf-8'))
                     pts = np.array([obj.polygon], np.int32)
                     cv2.polylines(frame, [pts], True, (0, 255, 0), 2)
-                except: continue
+                except Exception:
+                    continue
             self.show_frame(frame)
         
         if self.last_success: self.stop_camera()
@@ -259,6 +279,19 @@ class ReceiverApp:
         self.cam_label.imgtk = imgtk
         self.cam_label.configure(image=imgtk, text="")
 
+    def decode_filename(self, encoded_name):
+        """
+        Decodes a Base64-encoded filename from the START packet.
+        Falls back to the raw value for legacy senders.
+        """
+        try:
+            decoded = base64.b64decode(encoded_name, validate=True).decode('utf-8')
+            if decoded and '\x00' not in decoded:
+                return decoded
+        except Exception:
+            pass
+        return encoded_name
+
     def process_qr_data(self, data):
         """
         Main decoding logic: Validates packets and reconstructs the file.
@@ -267,14 +300,20 @@ class ReceiverApp:
             parts = data.split('|')
             
             # 1. VALIDATION OF START PACKET
-            if parts[0] == "START" and not self.is_collecting:
+            if parts[0] == "START" and (not self.is_collecting or self.last_success):
+                if self.last_success:
+                    self.received_chunks = {}
+                    self.pre_start_buffer = {}
+                    self.pre_start_logged = False
+                    self.last_success = False
+
                 # Check for mandatory 4 fields (START, Name, Chunks, Hash)
                 if len(parts) < 4:
                     self.log_message("SECURITY ALERT: Old/Insecure protocol rejected.")
                     self.notify_var.set("❌ ERROR: INSECURE SOURCE")
                     return
 
-                raw_filename = parts[1]
+                raw_filename = self.decode_filename(parts[1])
                 num_chunks = int(parts[2])
                 self.expected_hash = parts[3]
 
@@ -283,9 +322,9 @@ class ReceiverApp:
                     self.log_message("SECURITY ALERT: Invalid chunk count.")
                     return
 
-                # Path Traversal & Sanitization
+                # Path Traversal protection; keep decoded filename characters intact
                 clean_filename = os.path.basename(raw_filename)
-                clean_filename = re.sub(r'(?u)[^-\w.]', '', clean_filename)
+                clean_filename = re.sub(r'[/\\:\x00]', '', clean_filename)
                 
                 # Extension Whitelisting
                 ext = os.path.splitext(clean_filename)[1].lower()
@@ -305,18 +344,35 @@ class ReceiverApp:
                 self.is_collecting = True
                 self.status_var.set(f"Status: Receiving {self.filename}")
                 self.log_message(f"Detected: {self.filename} ({self.total_chunks} chunks)")
+
+                for idx, payload in self.pre_start_buffer.items():
+                    if 0 <= idx < self.total_chunks and idx not in self.received_chunks:
+                        self.received_chunks[idx] = payload
+                self.pre_start_buffer = {}
+
+                if self.received_chunks:
+                    count = len(self.received_chunks)
+                    self.progress_bar["value"] = count
+                    self.progress_var.set(f"{count} / {self.total_chunks}")
+                    self.log_message(f"Restored {count} buffered chunk(s) from pre-START buffer")
+                    if count == self.total_chunks:
+                        self.save_and_finish()
+                        return
+
+                self.update_missing_chunks_display()
             
             # 2. VALIDATION OF DATA PACKETS
             elif parts[0] == "DATA" and self.is_collecting:
                 idx = int(parts[1])
-                payload = parts[2]
+                payload = '|'.join(parts[2:])
 
                 if not (0 <= idx < self.total_chunks):
                     return
 
                 if idx not in self.received_chunks:
-                    # DoS Protection: Memory Limit Check
-                    if (len(self.received_chunks) * 3000) > (self.MAX_FILE_SIZE_MB * 1024 * 1024):
+                    # DoS Protection: Memory Limit Check (based on actual payload sizes)
+                    current_size = sum(len(v) for v in self.received_chunks.values())
+                    if (current_size + len(payload)) > (self.MAX_FILE_SIZE_MB * 1024 * 1024):
                         self.log_message("SECURITY ALERT: File size limit exceeded.")
                         self.reset_ui_state()
                         return
@@ -327,11 +383,36 @@ class ReceiverApp:
                     self.progress_bar["value"] = count
                     self.progress_var.set(f"{count} / {self.total_chunks}")
                     self.root.update_idletasks()
+                    self.update_missing_chunks_display()
                     
                     if count == self.total_chunks:
                         self.save_and_finish()
+
+            elif parts[0] == "DATA" and not self.is_collecting:
+                idx = int(parts[1])
+                payload = '|'.join(parts[2:])
+                if idx not in self.pre_start_buffer:
+                    self.pre_start_buffer[idx] = payload
+                    if not self.pre_start_logged:
+                        self.pre_start_logged = True
+                        self.log_message("Buffering DATA packets (waiting for START)")
         except Exception:
             self.log_message("Security Filter: Invalid packet discarded.")
+
+    def update_missing_chunks_display(self):
+        """
+        Updates the status line with indices of chunks still missing.
+        """
+        if not self.is_collecting or self.total_chunks == 0:
+            return
+
+        missing = [i for i in range(self.total_chunks) if i not in self.received_chunks]
+        if missing:
+            display = missing[:15]
+            suffix = f" (+{len(missing) - 15} more)" if len(missing) > 15 else ""
+            self.status_var.set(f"Status: Missing chunks: {', '.join(map(str, display))}{suffix}")
+        else:
+            self.status_var.set(f"Status: Receiving {self.filename}")
 
     def save_and_finish(self):
         """
@@ -357,6 +438,10 @@ class ReceiverApp:
                 f.write(file_bytes)
             
             self.last_success = True
+            self.is_collecting = False
+            self.received_chunks = {}
+            self.pre_start_buffer = {}
+            self.pre_start_logged = False
             self.notify_var.set("✔ FILE RECONSTRUCTED & SAVED")
             self.log_message(f"SUCCESS: Saved to {path}")
             self.status_var.set("Status: Download Complete")
@@ -370,7 +455,14 @@ class ReceiverApp:
 
     def reset_ui_state(self):
         self.stop_camera()
-        self.received_chunks = {}; self.is_collecting = False; self.last_success = False
+        self.received_chunks = {}
+        self.pre_start_buffer = {}
+        self.pre_start_logged = False
+        self.is_collecting = False
+        self.last_success = False
+        self.filename = ""
+        self.total_chunks = 0
+        self.expected_hash = ""
         self.progress_bar["value"] = 0
         self.progress_var.set("0 / 0")
         self.notify_var.set("")

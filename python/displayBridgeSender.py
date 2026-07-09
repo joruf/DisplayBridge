@@ -98,7 +98,7 @@ from tkinterdnd2 import DND_FILES, TkinterDnD
 # --- NEU: Globale Funktion für die Worker-Prozesse ---
 # Muss außerhalb der Klasse stehen, damit sie "picklable" für die Parallelisierung ist.
 def _worker_generate_qr(data):
-    qr = QRCode(version=None, error_correction=constants.ERROR_CORRECT_L, box_size=10, border=2)
+    qr = QRCode(version=None, error_correction=constants.ERROR_CORRECT_M, box_size=10, border=2)
     qr.add_data(data)
     qr.make(fit=True)
     # Rückgabe als RGB-Image
@@ -224,8 +224,8 @@ class DisplayBridgeApp:
             
             parts = [b64_str[i:i+self.chunk_size] for i in range(0, len(b64_str), self.chunk_size)]
             
-            # NEU: START-Paket enthält jetzt zusätzlich den Hash am Ende
-            raw_chunks = [f"START|{self.filename}|{len(parts)}|{file_hash}"] + [f"DATA|{i}|{c}" for i, c in enumerate(parts)]
+            fn_b64 = base64.b64encode(self.filename.encode('utf-8')).decode('ascii')
+            raw_chunks = [f"START|{fn_b64}|{len(parts)}|{file_hash}"] + [f"DATA|{i}|{c}" for i, c in enumerate(parts)]
             
             # --- PARALLELE GENERIERUNG ---
             with ProcessPoolExecutor() as executor:
@@ -269,7 +269,7 @@ class DisplayBridgeApp:
                 cv_img = cv2.cvtColor(np.array(img_resized), cv2.COLOR_RGB2BGR)
                 video.write(cv_img)
                 if idx == 0 or idx == total_frames - 1:
-                    video.write(cv_img) 
+                    video.write(cv_img)
 
             video.release()
             self.notify_var.set(f"✔ VIDEO SAVED")
